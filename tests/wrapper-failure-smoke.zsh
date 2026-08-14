@@ -43,6 +43,26 @@ exit 42
 EOF
 chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/gemini"
 
+# Consumer shims must resolve the canonical gateway before argument validation.
+# This fixture deliberately passes no arguments, so it cannot invoke a provider.
+consumer_root="$test_root/prediction-markets/shim-consumer"
+mkdir -p "$consumer_root/reviewers" "$test_root/reviewer-agent-gateway"
+for wrapper in claude-review.sh gemini-review.sh kimi-review.sh; do
+  cp "$root/$wrapper" "$test_root/reviewer-agent-gateway/$wrapper"
+  cat > "$consumer_root/reviewers/$wrapper" <<EOF
+#!/bin/zsh
+set -euo pipefail
+reviewer_root="\$(cd "\$(dirname "\$0")/../../../reviewer-agent-gateway" && pwd -P)"
+exec "\$reviewer_root/$wrapper" "\$@"
+EOF
+  chmod 755 "$consumer_root/reviewers/$wrapper"
+  set +e
+  "$consumer_root/reviewers/$wrapper" >/dev/null 2>&1
+  code=$?
+  set -e
+  [[ $code -eq 64 ]]
+done
+
 run_failure() {
   local wrapper="$1" model="$2" output="$3"; shift 3
   set +e

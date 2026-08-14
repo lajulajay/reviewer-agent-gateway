@@ -41,3 +41,7 @@ Run provider-free regression checks with:
 ```bash
 tests/wrapper-failure-smoke.zsh
 ```
+
+This includes a consumer-shim resolution fixture: each shim is invoked without
+arguments and must reach the canonical gateway's argument validation (exit 64),
+without starting a provider request.
