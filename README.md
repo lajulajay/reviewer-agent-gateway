@@ -36,6 +36,16 @@ second reviewer when Claude is unavailable or a decision-material disagreement
 remains unresolved. Kimi is inactive while Moonshot membership access is
 pending; it may be reconsidered only after explicit reactivation.
 
+Before a Gemini review, the gateway uses the configured API key to paginate
+`models.list` and requires the requested model to support `generateContent`.
+This is fail-closed and happens before the CLI request. Callers may pass a
+concrete available model, or the stable `pro` / `flash` capability profiles.
+The profiles choose the first account-available candidate from
+`GEMINI_REVIEW_PRO_MODELS` or `GEMINI_REVIEW_FLASH_MODELS` (comma-separated);
+their defaults are maintained by the gateway. `auto` routing is refused for
+review reproducibility. Artifacts record the requested value, the preflight
+selection, and the model(s) the CLI reports as resolved.
+
 Run provider-free regression checks with:
 
 ```bash
