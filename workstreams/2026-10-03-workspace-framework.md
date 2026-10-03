@@ -44,6 +44,7 @@ changed by this workstream until the user approves a rollout.
 | r01 (v1) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r01.md` | REJECT |
 | r02 (v2) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r02.md` | REJECT |
 | r03 (v3) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r03.md` | REJECT |
+| r04 (v4) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r04.md` | REJECT |
 
 ## Findings and conditions
 
@@ -89,6 +90,18 @@ changed by this workstream until the user approves a rollout.
 | R03-F9 | major | Memory cleanup scheduled after pilot while checks fail on breach | Accepted: baseline before pilot; existing overages are ratcheted targets (must not grow), conflicting loaded memory cleared before pilot | resolved in v4 |
 | R03-F10 | major | Listed local files can be stranded; same-day runtime check can be stale | Accepted: pending content committed; runtime observation taken immediately before an operational handoff | resolved in v4 |
 | R03-F11 | major | Standards mismatch only reported | Accepted: mismatch fails record; wrapper records the gateway revision it ran from | resolved in v4 |
+| R04-F1 | minor | Closure log should say raw was compared with rows | Accepted: wording in v5 §3.5 | resolved in v5 |
+| R04-F2 | minor | Stopping older sessions must be an explicit prerequisite | Accepted: v5 §4 marks it a prerequisite | resolved in v5 |
+| R04-F3 | blocker | verified/user-decided can cite text unrelated to the finding | Accepted: closure quote must name the finding or state its resolution (v5 §3.4) | resolved in v5 |
+| R04-F4 | minor | rejected: <reason> can dodge a valid major | Accepted: reason must state out-of-scope or no longer actionable | resolved in v5 |
+| R04-F5 | major | Review index not authoritative; legacy reconciliation not a done gate | Accepted: index authoritative, paths validated; reconciliation required for done | resolved in v5 |
+| R04-F6 | minor | Keep limited claim for pre-push changes | Accepted: unchanged limited claim | resolved in v5 |
+| R04-F7 | major | Per-file ratchet misses aggregate T2 growth | Accepted: per-tier total baselines added | resolved in v5 |
+| R04-F8 | minor | Check workstream before acting on a snapshot | Accepted: wording in v5 §2 | resolved in v5 |
+| R04-F9 | major | Aggregate agent-cache overage passes indefinitely | Accepted: tier-total ratchet covers agent cache | resolved in v5 |
+| R04-F10 | major | New untracked/ignored files not inventoried at transfer | Accepted: inventory output required in handoff block | resolved in v5 |
+| R04-F11 | major | Recorded HEAD may not be the standards actually loaded | Partially accepted: reviewers never receive standards text, so the governing standards are the wrapper's checkout; wrapper refuses to run with uncommitted standards/wrapper changes and records HEAD | resolved in v5 |
+| R04-F12 | minor | v4 misstates D5 | Accepted: v5 records D5 as done (0205f91) | resolved in v5 |
 
 ## Log
 
@@ -105,3 +118,9 @@ changed by this workstream until the user approves a rollout.
 - 2026-10-03: r03 Codex REJECT (2 blockers, 9 majors; converging). All
   findings accepted; F6 drops the sidecar in line with the sprawl constraint.
   v4 written as successor.
+- 2026-10-03: D5 executed: `trading-strategies` audited (3.0 GB licensed raw data and sealed
+  artifacts confirmed ignored via `experiment/.gitignore`; root ignore gained
+  `.DS_Store`, `__pycache__/`, `*.py[cod]`) and initialized as git, first
+  commit `0205f91` (95 files, 1.18 MB, secret scan clean). No remote yet.
+- 2026-10-03: r04 Codex REJECT (1 blocker; 7 items satisfied within pilot scope). All
+  accepted (F11 partially). v5 = v4 plus targeted edits tagged R04.
