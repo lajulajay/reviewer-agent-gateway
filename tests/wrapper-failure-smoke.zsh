@@ -355,6 +355,9 @@ text = body + "\n\nF1 [minor]: a finding.\n**C1:** a condition.\n\n**ATTESTATION
 assert subprocess.run([validator], input=text, text=True).returncode == 0
 labeled = body + "\nF1 [blocker]: broken.\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n"
 assert subprocess.run([validator], input=labeled, text=True).returncode == 0
+short_verification = "R03-F1 is resolved.\nR03-C1 is resolved.\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: ACCEPT\n"
+assert subprocess.run([validator], input=short_verification, text=True).returncode == 0
+assert subprocess.run([validator], input="Looks fine.\nVERDICT: ACCEPT\n", text=True, capture_output=True).returncode != 0
 for invalid_label in (
     body + "\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n",
     body + "\nF1 [minor]: x\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: ACCEPT WITH CONDITIONS\n",

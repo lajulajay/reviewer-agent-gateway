@@ -14,7 +14,11 @@ VERDICT = re.compile(
 
 text = sys.stdin.read()
 minimum = int(sys.argv[1]) if len(sys.argv) > 1 else 400
-if len(text.strip()) < minimum:
+# A verification review made of explicit per-item status lines is legitimately
+# short (found in the kalshi-finance-agent pilot); the minimum length guards
+# against empty or procedural replies, which status lines are not.
+STATUS_LINE = re.compile(r"(?m)^R\d+-[FC]\d+ (?:is resolved\.|remains open:)")
+if len(text.strip()) < minimum and not STATUS_LINE.search(text):
     print(f"review is shorter than {minimum} characters", file=sys.stderr)
     raise SystemExit(1)
 matches = list(VERDICT.finditer(text))
