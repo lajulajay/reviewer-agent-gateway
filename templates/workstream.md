@@ -4,6 +4,7 @@ Workstream: <YYYY-MM-DD>-<slug>
 Owner: <Codex|Claude> (<date>, assigned by the user at <commit>)
 Status: active
 Branch: <branch>
+Operational: <yes|no>
 Links: <experiment, issue, or document links>
 
 ## Brief
@@ -12,8 +13,8 @@ Links: <experiment, issue, or document links>
 
 ## Decisions
 
-- <date>, user, scope: <what this covers>. Quote: "<user's words>".
-  Supersedes: <earlier decision or none>.
+- <YYYY-MM-DD>, user, scope: <what this covers>.
+  Quote: "<user's words>". Supersedes: <earlier decision or none>.
 
 ## Reviews
 
@@ -23,11 +24,9 @@ Links: <experiment, issue, or document links>
 ## Findings and conditions
 
 <!-- One row per labeled item; generate with: docs-check.py dispositions <artifact> <round>.
-     Blocker/condition: verified rNN "<later review's words naming this ID and affirming resolution>"
-       | user-decided <date> "<user's words in Decisions, naming this ID>"
-       | carried RNN-Xn (same round: this item's text cites Xn; later round: that item's text cites this ID;
-         the chain must end in evidence valid for this item's severity)
-     Major/minor: any of the above, fixed <commit in pushed history>,
+     Blocker/condition: verified rNN   (review NN contains the line "<ID> is resolved.")
+       | user-decided <date> "<quote naming this ID>"   (inside a Decisions entry of that date with a scope)
+     Major/minor: either of the above, fixed <commit in pushed history>,
        or rejected: <the scoped decision or changed fact that makes it inapplicable> -->
 
 | ID | Severity | Disposition | Status |
@@ -45,6 +44,6 @@ Current state: <one paragraph>
 Decisions: <links to Decisions entries in force>
 Open obligations: <row IDs still open, with state>
 Inventory: `git status --short --ignored`; <n> untracked, <n> ignored; needed by next owner: <committed paths, comma-separated> | none
-Runtime observation: <YYYY-MM-DD HH:MM, within two hours> <commands and result> | n/a (not operational)
+Runtime observation: <YYYY-MM-DD HH:MM> `<command>` -> <result>   (within two hours) | n/a (not operational) if Operational: no
 Restart sequence: <numbered steps>
 -->

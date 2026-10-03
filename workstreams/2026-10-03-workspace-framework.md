@@ -4,6 +4,7 @@ Workstream: 2026-10-03-workspace-framework
 Owner: Claude (2026-10-03, assigned by the user)
 Status: active
 Branch: main
+Operational: no
 Links: [proposal](../proposals/2026-10-03-workspace-framework.md)
 
 ## Brief
@@ -51,6 +52,7 @@ changed by this workstream until the user approves a rollout.
 | r04 (v4) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r04.md` | REJECT |
 | r05 (v5) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r05.md` | REJECT |
 | r06 (implementation 4d3f7bc) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r06.md` | REJECT |
+| r07 (implementation daf4bb5 + status lines) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r07.md` | REJECT |
 
 ## Findings and conditions
 
@@ -155,6 +157,16 @@ changed by this workstream until the user approves a rollout.
 | R06-F6 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
 | R06-F7 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
 | R06-F8 | minor | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R07-C1 | condition | (see raw review) | open | open |
+| R07-C2 | condition | (see raw review) | open | open |
+| R07-C3 | condition | (see raw review) | open | open |
+| R07-F1 | blocker | (see raw review) | open | open |
+| R07-F2 | blocker | (see raw review) | open | open |
+| R07-F3 | blocker | (see raw review) | open | open |
+| R07-F4 | major | (see raw review) | open | open |
+| R07-F5 | major | (see raw review) | open | open |
+| R07-F6 | major | (see raw review) | open | open |
+| R07-F7 | major | (see raw review) | open | open |
 
 ## Log
 
@@ -186,3 +198,12 @@ changed by this workstream until the user approves a rollout.
   are now rows (open). Round-4/5 verdicts judged findings positionally without
   naming IDs, so their quotes cannot close rows under the strict closure rule;
   r07 is asked for one explicit status line per item ID.
+- 2026-10-03: r07 Codex REJECT with explicit per-ID status lines for all 99
+  items (about half resolved). The open items reduce to seven root causes,
+  fixed together: exact "<ID> is resolved." lines for verified closures;
+  `carried` removed; dated, scoped Decisions entries for user-decided; legacy
+  list may only shrink and adopted repos need a baseline; review evidence
+  must be tracked; deleted/re-added artifacts fail; handoff inventory counts
+  checked against git status, observations need a command and result and may
+  not be future-dated, and n/a requires `Operational: no`. Residual by
+  design: authenticity of transcribed user quotes is policy, not machine-checked.

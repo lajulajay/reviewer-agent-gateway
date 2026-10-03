@@ -5,7 +5,7 @@
   docs-check.py transfer REPO WORKSTREAM    record + safe to hand off
   docs-check.py done REPO WORKSTREAM        record + every obligation closed
   docs-check.py dispositions ARTIFACT ROUND print empty disposition rows
-  docs-check.py report REPO [--write-baseline | --lower] [--memory DIR]
+  docs-check.py report REPO [--write-baseline | --lower | --add-memory] [--memory DIR]
 
 WORKSTREAM is a path relative to REPO (e.g. workstreams/2026-10-03-x.md).
 Exit status 0 means pass; 1 means at least one error was printed.
@@ -27,7 +27,6 @@ BUDGET = {"STATUS.md": 4000, "AGENTS.md": 12000, "PROTOCOL.md": 12000,
 REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Kimi review")
 FINDING = re.compile(r"^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
 CONDITION = re.compile(r"^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
-OPEN_WORDS = re.compile(r"(?i)\b(remains?|still|open|partial(?:ly)?|unresolved|not (?:yet )?(?:resolved|satisfied|met|addressed)|cannot|unmet)\b")
 VALIDATOR = GATEWAY / "reviewer-validate.py"
 ROW_ID = re.compile(r"^R(\d+)-([FC]\d+)$")
 CLOSURE = "raw review compared with its rows; no unlabeled actionable item"
@@ -276,6 +275,21 @@ def record(repo):
     legacy = set(base.get("legacy_collab", []))
     indexed = set()
     pin = standards_pin(repo)
+    in_git = git(repo, "rev-parse", "--git-dir")[0] == 0
+    # C/F: an adopted repository (one with workstreams/) must have a baseline,
+    # whose legacy list may only shrink from its first committed version.
+    if (repo / "workstreams").is_dir() and not base:
+        errors.append(f"{BASELINE} is missing; run 'docs-check.py report <repo> --write-baseline' at adoption")
+    if in_git and base and git(repo, "ls-files", "--error-unmatch", BASELINE)[0] == 0:
+        code, first_rev = git(repo, "log", "--diff-filter=A", "--format=%H", "--", BASELINE)
+        first_rev = first_rev.split()[-1] if first_rev else ""
+        code, first = git(repo, "show", f"{first_rev}:{BASELINE}") if first_rev else (1, "")
+        if code == 0:
+            grown = legacy - set(json.loads(first).get("legacy_collab", []))
+            if grown:
+                errors.append(f"{BASELINE}: legacy list grew after its first commit: {sorted(grown)[:3]}")
+    if repo == GATEWAY and base and "agent_cache" not in base:
+        errors.append(f"{BASELINE}: the gateway baseline must record the agent cache (report --memory DIR --add-memory)")
     for wpath in workstreams(repo):
         ws = Workstream(repo, wpath)
         name = wpath.relative_to(repo)
@@ -295,11 +309,15 @@ def record(repo):
                 errors.append(f"{name}: r{rnd:02d} artifact {rel} checksum missing, malformed, or mismatched")
             for f in (art, side):
                 frel = str(f.relative_to(repo))
-                if git(repo, "ls-files", "--error-unmatch", frel)[0] == 0:
+                if in_git and git(repo, "ls-files", "--error-unmatch", frel)[0] != 0:
+                    errors.append(f"{name}: {frel} is not tracked; review evidence must be committed")
+                elif in_git:
                     if git(repo, "diff", "--quiet", "HEAD", "--", frel)[0] != 0:
                         errors.append(f"{name}: {frel} has uncommitted changes (artifacts are never edited)")
-                    if git(repo, "log", "--format=%H", "--diff-filter=M", "--", frel)[1]:
-                        errors.append(f"{name}: {frel} was modified after its first commit")
+                    if git(repo, "log", "--format=%H", "--diff-filter=MDR", "--", frel)[1]:
+                        errors.append(f"{name}: {frel} was modified, deleted, or renamed after its first commit")
+                    if len(git(repo, "log", "--format=%H", "--diff-filter=A", "--", frel)[1].split()) > 1:
+                        errors.append(f"{name}: {frel} was added more than once (replaced)")
             items, dupes = labeled_items(art)
             errors.extend(f"{name}: r{rnd:02d} has duplicate label {d}" for d in dupes)
             post_adoption = arel not in legacy
@@ -367,77 +385,81 @@ def transfer(repo, wrel):
     inv = re.search(r"(?m)^Inventory: `([^`]+)`; (\d+) untracked, (\d+) ignored; needed by next owner: (.+)$", block)
     if not inv:
         errors.append("transfer: Inventory must read 'Inventory: `<command>`; <n> untracked, <n> ignored; needed by next owner: <paths> | none'")
-    elif inv.group(4).strip() != "none":
+    else:
+        _, status = git(repo, "status", "--porcelain", "--ignored")
+        lines = status.splitlines()
+        actual = (sum(l.startswith("?? ") for l in lines), sum(l.startswith("!! ") for l in lines))
+        if (int(inv.group(2)), int(inv.group(3))) != actual:
+            errors.append(f"transfer: inventory says {inv.group(2)} untracked, {inv.group(3)} ignored; git status shows {actual[0]} and {actual[1]}")
+    if inv and inv.group(4).strip() != "none":
         for path in [x.strip() for x in inv.group(4).split(",")]:
             if git(repo, "ls-files", "--error-unmatch", path)[0] != 0:
                 errors.append(f"transfer: needed file {path} is not committed")
     obs = re.search(r"(?m)^Runtime observation: (.+)$", block)
+    operational = (ws.header.get("Operational") or ["yes"])[-1].strip().lower() != "no"
     if not obs:
         errors.append("transfer: latest handoff block lacks 'Runtime observation:'")
-    elif obs.group(1).strip() != "n/a (not operational)":
-        t = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", obs.group(1))
+    elif obs.group(1).strip() == "n/a (not operational)":
+        if operational:
+            errors.append("transfer: 'n/a (not operational)' needs 'Operational: no' in the workstream header")
+    else:
+        t = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) `[^`]+` -> \S", obs.group(1))
         if not t:
-            errors.append("transfer: Runtime observation must start with 'YYYY-MM-DD HH:MM' or be 'n/a (not operational)'")
-        elif (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds() > MAX_OBSERVATION_AGE:
-            errors.append("transfer: Runtime observation is older than two hours; observe again immediately before handoff")
+            errors.append("transfer: Runtime observation must read 'YYYY-MM-DD HH:MM `<command>` -> <result>'")
+        else:
+            age = (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds()
+            if age < -60:
+                errors.append("transfer: Runtime observation time is in the future")
+            elif age > MAX_OBSERVATION_AGE:
+                errors.append("transfer: Runtime observation is older than two hours; observe again immediately before handoff")
     if not re.search(r"(?m)^Restart sequence: \S", block):
         errors.append("transfer: latest handoff block lacks 'Restart sequence:'")
     return errors
 
 
-def item_text(ws, rid):
-    rnd, item = int(ROW_ID.match(rid).group(1)), ROW_ID.match(rid).group(2)
-    items, _ = labeled_items(ws.repo / ws.reviews[rnd])
-    return items.get(item, ("", ""))[1]
+def decision_entries(ws):
+    """Dated Decisions entries: '- YYYY-MM-DD, user, scope: ...' plus continuation lines."""
+    entries, current = [], None
+    for line in ws.sections.get("Decisions", []):
+        m = re.match(r"^- (\d{4}-\d{2}-\d{2}), user, scope: (.+)$", line)
+        if m:
+            current = [m.group(1), line]
+            entries.append(current)
+        elif current and line.startswith("  "):
+            current[1] += " " + line.strip()
+        elif not line.strip():
+            current = None
+    return entries
 
 
-def disposition_errors(ws, rid, seen=(), strict_from=None):
-    """Errors for one row. strict_from carries the original strict item through
-    a carried chain, so the chain's end must satisfy the original's severity."""
+def disposition_errors(ws, rid):
+    """Errors for one row's final disposition (v6 §3.4, tightened by r06/r07)."""
     row = ws.rows[rid]
     rnd = int(ROW_ID.match(rid).group(1))
     sev, disp = row["severity"], row["disposition"]
-    strict = sev in ("blocker", "condition") or strict_from is not None
-    m = re.match(r'^verified r(\d+) "(.+)"$', disp)
+    strict = sev in ("blocker", "condition")
+    m = re.match(r"^verified r(\d+)$", disp)
     if m:
-        later, quote = int(m.group(1)), m.group(2)
+        # The later review must contain the exact status line "<ID> is resolved."
+        # at the start of a line: affirmative, specific, and in the reviewer's words.
+        later = int(m.group(1))
         if later <= rnd or later not in ws.reviews:
             return [f"{rid}: verified cites r{later:02d}, which is not a later indexed round"]
-        if norm(quote) not in norm(artifact_text(ws.repo / ws.reviews[later])):
-            return [f"{rid}: verified quote does not occur in r{later:02d}"]
-        if rid not in quote or OPEN_WORDS.search(quote):
-            return [f"{rid}: verified quote must name {rid} and affirm resolution without open-status words"]
+        if not re.search(rf"(?m)^\W*{re.escape(rid)} is resolved\.?\W*$", artifact_text(ws.repo / ws.reviews[later])):
+            return [f"{rid}: r{later:02d} has no line '{rid} is resolved.'"]
         return []
     m = re.match(r'^user-decided (\d{4}-\d{2}-\d{2}) "(.+)"$', disp)
     if m:
-        if norm(m.group(2)) not in norm(ws.section("Decisions")):
-            return [f"{rid}: user-decided quote does not occur in the Decisions section"]
-        if rid not in m.group(2):
+        # The quote must sit in a Decisions entry of the same date with a stated
+        # scope, and name this item. Authenticity of the transcription is policy.
+        day, quote = m.group(1), m.group(2)
+        if rid not in quote:
             return [f"{rid}: user-decided quote must name {rid}"]
+        if not any(d == day and norm(quote) in norm(text) for d, text in decision_entries(ws)):
+            return [f"{rid}: no Decisions entry dated {day} with a scope contains the quote"]
         return []
-    m = re.match(r"^carried (R\d+-[FC]\d+)$", disp)
-    if m:
-        target = m.group(1)
-        if target == rid or target not in ws.rows or int(ROW_ID.match(target).group(1)) < rnd:
-            return [f"{rid}: carried target {target} is not this or a later round's row"]
-        if target in seen:
-            return [f"{rid}: carried chain loops"]
-        # Explicit mapping, checked in the reviewer's own words: within a round
-        # the restating item cites the target's short ID ("C1: ... under F1");
-        # across rounds the re-raised target cites this item's full ID
-        # ("R01-F1 is partially resolved").
-        if int(ROW_ID.match(target).group(1)) == rnd:
-            cite, where, text = ROW_ID.match(target).group(2), rid, item_text(ws, rid)
-        else:
-            cite, where, text = rid, target, item_text(ws, target)
-        if not re.search(rf"\b{re.escape(cite)}\b", text):
-            return [f"{rid}: carried requires {where}'s review text to cite {cite}"]
-        origin = strict_from or (rid if sev in ("blocker", "condition") else None)
-        sub = disposition_errors(ws, target, seen + (rid,), origin)
-        return [f"{rid}: carried target is not closed ({e})" for e in sub]
     if strict:
-        label = f"{sev} (carried from {strict_from})" if strict_from else sev
-        return [f"{rid}: a {label} closes only by verified, user-decided, or carried (got {disp!r})"]
+        return [f"{rid}: a {sev} closes only by 'verified rNN' or 'user-decided <date> \"<quote>\"' (got {disp!r})"]
     m = re.match(r"^fixed ([0-9a-f]{7,40})$", disp)
     if m:
         if git(ws.repo, "cat-file", "-e", m.group(1) + "^{commit}")[0] != 0:
@@ -498,6 +520,15 @@ def report(repo, write=False, lower=False, memory=None):
             base["agent_cache"] = mem
         path.write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
         print(f"wrote {path}")
+    elif "--add-memory" in sys.argv:
+        base = load_baseline(repo)
+        if not mem:
+            raise SystemExit("--add-memory needs --memory DIR")
+        if "agent_cache" in base:
+            raise SystemExit("agent cache already in baseline; use --lower")
+        base["agent_cache"] = mem
+        path.write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
+        print(f"added agent cache to {path}")
     elif lower:
         base = load_baseline(repo)
         for rel in list(base.get("files", {})):
