@@ -2,17 +2,17 @@
  "agent_cache": {
   "dir": "/Users/lajulajay/.claude/projects/-Users-lajulajay-Developer/memory",
   "files": {
-   "MEMORY.md": 2892,
+   "MEMORY.md": 2507,
    "feedback-claude-codex-collab.md": 3243,
-   "kalshi-temperature-pivot-2026-07-24.md": 13665,
+   "kalshi-temperature-pivot-2026-07-24.md": 686,
    "prediction-markets-ops.md": 7150,
-   "project-kalshi-econ-agent.md": 8608,
-   "project-kalshi-finance-agent.md": 14038,
+   "project-kalshi-econ-agent.md": 8558,
+   "project-kalshi-finance-agent.md": 13999,
    "project-kalshi-temp-bot.md": 10254,
-   "project-polymarket-bot.md": 13373,
+   "project-polymarket-bot.md": 13347,
    "project-reviewer-gateway-antigravity.md": 3199
   },
-  "total": 76422
+  "total": 62943
  },
  "created": "2026-10-03",
  "files": {},
