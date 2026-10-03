@@ -56,117 +56,119 @@ changed by this workstream until the user approves a rollout.
 
 ## Findings and conditions
 
-| ID | Severity | Finding | Disposition | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| R01-F1 | blocker | D1 checksum+table does not preserve anti-softening; owner can omit a condition | Accepted. v2: wrapper extracts labeled findings into a sidecar at capture; disposition table skeleton generated with exact text; check enforces completeness | resolved in v2 |
-| R01-F2 | blocker | Untracked lock is per-worktree; PID host-local; concurrent sessions not serialized; main-only process docs race | Accepted (verified: worktrees have separate toplevels). v2: lock advisory only; serialization via handoff event; no hand-edited shared status row; standards pinned by revision | resolved in v2 |
-| R01-F3 | blocker | Migration can erase uncommitted work or change live instructions | Accepted. v2: no archive moves or entry-point rewrites; repos adopt only at their next handoff from a clean, preserved revision; loader behavior verified first | resolved in v2 |
-| R01-F4 | major | 'Committed or declared' still leaves invisible state | Accepted. v2: handoff requires committed and pushed content; a pending declaration never completes a handoff | resolved in v2 |
-| R01-F5 | major | Source precedence lets stale STATUS authorize actions | Accepted. v2: authority by claim type; summaries never authorize; runtime facts re-verified live | resolved in v2 |
-| R01-F6 | major | docs-check gameable; misses closure invariant; self-maintained hashes not immutability | Accepted. v2: closure check traces every finding to a disposition; immutability claims limited to git history of pushed commits | resolved in v2 |
-| R01-F7 | major | Centralization creates new drift; repo no longer self-contained | Partially accepted. Volatile facts stay repo-local; only shared-resource facts (cron cap, shared database) get one home; standards pinned by revision | resolved in v2 (partial) |
-| R01-F8 | major | Triage open obligations before restructuring; owner check per round | Accepted. v2: triage at each workstream's first handoff; owner≠reviewer checked per round | resolved in v2 |
-| R01-F9 | major | git init of trading-strategies is a separate risk decision | Accepted. Removed from rollout; separate audited decision | resolved in v2 |
-| R01-F10 | minor | Too large; propose minimum viable version | Accepted. v2 is an MVP; other layers deferred until a pilot shows need | resolved in v2 |
-| R01-F11 | minor | Workflow failure needs a defined handoff event | Accepted. Handoff event is v2's central mechanism | resolved in v2 |
-| R02-F1 | blocker | Reviewer could leave a condition unlabeled in prose | Accepted as policy: wrapper contract requires an attestation line that every actionable item is labeled; owner checks the raw artifact at closure | resolved in v3 |
-| R02-F2 | blocker | Two sessions can pass handoff-check and both proceed | Accepted as policy: only the user assigns owners, via a committed and pushed Owner line naming the revision; sessions confirm it before starting | resolved in v3 |
-| R02-F3 | major | Clean revision may hide un-inventoried dirty work; @AGENTS.md may change loader | Accepted: inventory of the working tree preserved before adoption; loader check per repo | resolved in v3 |
-| R02-F4 | major | Untracked work escapes handoff-check | Accepted: handoff lists untracked and ignored-but-relevant files; pending items must have durable locations | resolved in v3 |
-| R02-F5 | major | Superseded decisions could still be quoted | Accepted: decisions carry scope and a supersedes/superseded-by field | resolved in v3 |
-| R02-F6 | blocker | Owner can reject a blocker unilaterally; fix commit unverified | Accepted: rejecting a blocker or condition requires a recorded user decision; fix commits must exist in the pushed history | resolved in v3 |
-| R02-F7 | major | Pin vs loaded standards mismatch; static cron count goes stale | Partially accepted: reviews record the standards revision used; shared-resource facts become pointers to a live check, not counts | resolved in v3 |
-| R02-F8 | major | Legacy triage waits for first handoff | Accepted: triage before transfer or done | resolved in v3 |
-| R02-F9 | minor | Keep git-init boundary explicit | Accepted | resolved in v3 |
-| R02-F10 | minor | Basic artifact and link check missing from core | Accepted: in core | resolved in v3 |
-| R02-F11 | major | Runtime check can be stale | Accepted: operational workstreams require a same-day runtime observation at handoff and re-verification on resume | resolved in v3 |
-| R02-F12 | major | Conditions lack generated rows | Accepted: conditions are records too | resolved in v3 |
-| R02-F13 | major | Artifact and sidecar can both be altered before first push | Accepted by narrowing the claim; no separate receipt service (sprawl) | resolved in v3 |
-| R02-F14 | major | Unlinked reviews escape closure | Accepted: every captured artifact in .collab/ must appear in some review index | resolved in v3 |
-| R02-F15 | blocker | Handoff vs closure rules conflict | Accepted: separate record-complete, transfer (open items allowed, listed) and done (all resolved) checks | resolved in v3 |
-| R02-F16 | major | Owner assignment can race or stay uncommitted | Accepted as policy (see R02-F2) | resolved in v3 |
-| R02-F17 | major | Reviewer may apply newer standards than branch pin | Partially accepted: standards revision recorded with each review; no digest enforcement | resolved in v3 |
-| R02-F18 | minor | Deferral triggers not observable | Accepted: triggers replaced by measurable caps and the periodic compaction pass | resolved in v3 |
-| R03-F1 | major | Unlabeled items untraceable if owner and reviewer both miss them | Accepted: at closure the owner records a raw-vs-rows comparison line per round; guarantee stated as labeled items only | resolved in v4 |
-| R03-F2 | major | Two sessions of the same owner can both start | Accepted: pilot policy — one session per workstream, user stops older sessions before reassignment; no general serialization claim | resolved in v4 |
-| R03-F3 | blocker | fixed <commit> and user-decided quotes do not prove an effective, specific resolution | Accepted: blocker/condition closure cites the later review round that verified it, or a user decision naming the finding ID | resolved in v4 |
-| R03-F4 | major | done allows open majors | Accepted: done needs a final disposition on every labeled item; open items allowed only at transfer | resolved in v4 |
-| R03-F5 | blocker | First done check impossible: legacy reviews, prompts/packets swept in | Accepted: check scoped to review artifacts; round key = artifact path; legacy rounds indexed and reconciled manually | resolved in v4 |
-| R03-F6 | major | Sidecar adds a file per review (sprawl) and cannot prove first output | Accepted: sidecar dropped; labeled items parsed from the committed raw artifact | resolved in v4 |
-| R03-F7 | major | Downward eviction can demote rules or strand obligations; uncapped tiers unstated | Accepted: budgets reduced by shortening and dedup in the authoritative home; capped vs reported tiers stated explicitly | resolved in v4 |
-| R03-F8 | major | STATUS.md can show a false current view across branches | Accepted: STATUS.md is a branch-scoped snapshot with revision and time; workstream records are authoritative | resolved in v4 |
-| R03-F9 | major | Memory cleanup scheduled after pilot while checks fail on breach | Accepted: baseline before pilot; existing overages are ratcheted targets (must not grow), conflicting loaded memory cleared before pilot | resolved in v4 |
-| R03-F10 | major | Listed local files can be stranded; same-day runtime check can be stale | Accepted: pending content committed; runtime observation taken immediately before an operational handoff | resolved in v4 |
-| R03-F11 | major | Standards mismatch only reported | Accepted: mismatch fails record; wrapper records the gateway revision it ran from | resolved in v4 |
-| R04-F1 | minor | Closure log should say raw was compared with rows | Accepted: wording in v5 §3.5 | resolved in v5 |
-| R04-F2 | minor | Stopping older sessions must be an explicit prerequisite | Accepted: v5 §4 marks it a prerequisite | resolved in v5 |
-| R04-F3 | blocker | verified/user-decided can cite text unrelated to the finding | Accepted: closure quote must name the finding or state its resolution (v5 §3.4) | resolved in v5 |
-| R04-F4 | minor | rejected: <reason> can dodge a valid major | Accepted: reason must state out-of-scope or no longer actionable | resolved in v5 |
-| R04-F5 | major | Review index not authoritative; legacy reconciliation not a done gate | Accepted: index authoritative, paths validated; reconciliation required for done | resolved in v5 |
-| R04-F6 | minor | Keep limited claim for pre-push changes | Accepted: unchanged limited claim | resolved in v5 |
-| R04-F7 | major | Per-file ratchet misses aggregate T2 growth | Accepted: per-tier total baselines added | resolved in v5 |
-| R04-F8 | minor | Check workstream before acting on a snapshot | Accepted: wording in v5 §2 | resolved in v5 |
-| R04-F9 | major | Aggregate agent-cache overage passes indefinitely | Accepted: tier-total ratchet covers agent cache | resolved in v5 |
-| R04-F10 | major | New untracked/ignored files not inventoried at transfer | Accepted: inventory output required in handoff block | resolved in v5 |
-| R04-F11 | major | Recorded HEAD may not be the standards actually loaded | Partially accepted: reviewers never receive standards text, so the governing standards are the wrapper's checkout; wrapper refuses to run with uncommitted standards/wrapper changes and records HEAD | resolved in v5 |
-| R04-F12 | minor | v4 misstates D5 | Accepted: v5 records D5 as done (0205f91) | resolved in v5 |
-| R05-F1 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
-| R05-F2 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
-| R05-F3 | blocker | (see r05) | Accepted: quote must name the finding and affirm resolution; tool checks quote occurs in the review | resolved in v6 |
-| R05-F4 | major | (see r05) | Accepted: rejection cites scoped decision or changed fact | resolved in v6 |
-| R05-F5 | major | (see r05) | Accepted: header-based discovery rule; ambiguous .collab files fail | resolved in v6 |
-| R05-F6 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
-| R05-F7 | minor | (see r05) | Accepted (see F13) | resolved in v6 |
-| R05-F8 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
-| R05-F9 | minor | (see r05) | Accepted (see F13) | resolved in v6 |
-| R05-F10 | minor | (see r05) | Accepted (see F14) | resolved in v6 |
-| R05-F11 | blocker | (see r05) | Accepted: claim narrowed to wrapper provenance; pin governs owner process | resolved in v6 |
-| R05-F12 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
-| R05-F13 | major | (see r05) | Accepted: baseline is the effective limit; never raised | resolved in v6 |
-| R05-F14 | major | (see r05) | Accepted: inventory recorded as command, counts, needed files | resolved in v6 |
-| R05-F15 | major | (see r05) | Accepted: compact rows keyed to artifact and ID; exact text read from artifact | resolved in v6 |
-| R02-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R02-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R02-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R02-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R02-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R02-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R03-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R03-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R03-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R03-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R03-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R03-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R04-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R04-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R04-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R04-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R04-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R04-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R05-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R05-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R05-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R05-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R05-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R05-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F1 | blocker | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F2 | blocker | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F3 | blocker | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F4 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F5 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F6 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F7 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R06-F8 | minor | (see raw review) | open: legacy triage 2026-10-03 | open |
-| R07-C1 | condition | (see raw review) | open | open |
-| R07-C2 | condition | (see raw review) | open | open |
-| R07-C3 | condition | (see raw review) | open | open |
-| R07-F1 | blocker | (see raw review) | open | open |
-| R07-F2 | blocker | (see raw review) | open | open |
-| R07-F3 | blocker | (see raw review) | open | open |
-| R07-F4 | major | (see raw review) | open | open |
-| R07-F5 | major | (see raw review) | open | open |
-| R07-F6 | major | (see raw review) | open | open |
-| R07-F7 | major | (see raw review) | open | open |
+Compact rows (R05-F15): exact text stays in the indexed raw review.
+
+| ID | Severity | Disposition | Status |
+| :--- | :--- | :--- | :--- |
+| R01-F1 | blocker | verified r07 | closed |
+| R01-F2 | blocker | verified r07 | closed |
+| R01-F3 | blocker | verified r07 | closed |
+| R01-F4 | major | open: re-verify in r08 | open |
+| R01-F5 | major | open: re-verify in r08 | open |
+| R01-F6 | major | open: re-verify in r08 | open |
+| R01-F7 | major | verified r07 | closed |
+| R01-F8 | major | open: re-verify in r08 | open |
+| R01-F9 | major | verified r07 | closed |
+| R01-F10 | minor | verified r07 | closed |
+| R01-F11 | minor | open: re-verify in r08 | open |
+| R02-F1 | blocker | verified r07 | closed |
+| R02-F2 | blocker | verified r07 | closed |
+| R02-F3 | major | verified r07 | closed |
+| R02-F4 | major | open: re-verify in r08 | open |
+| R02-F5 | major | open: re-verify in r08 | open |
+| R02-F6 | blocker | open: re-verify in r08 | open |
+| R02-F7 | major | verified r07 | closed |
+| R02-F8 | major | open: re-verify in r08 | open |
+| R02-F9 | minor | verified r07 | closed |
+| R02-F10 | minor | verified r07 | closed |
+| R02-F11 | major | open: re-verify in r08 | open |
+| R02-F12 | major | verified r07 | closed |
+| R02-F13 | major | verified r07 | closed |
+| R02-F14 | major | open: re-verify in r08 | open |
+| R02-F15 | blocker | verified r07 | closed |
+| R02-F16 | major | verified r07 | closed |
+| R02-F17 | major | verified r07 | closed |
+| R02-F18 | minor | verified r07 | closed |
+| R02-C1 | condition | open: re-verify in r08 | open |
+| R02-C2 | condition | open: re-verify in r08 | open |
+| R02-C3 | condition | open: re-verify in r08 | open |
+| R02-C4 | condition | verified r07 | closed |
+| R02-C5 | condition | open: re-verify in r08 | open |
+| R02-C6 | condition | verified r07 | closed |
+| R03-F1 | major | verified r07 | closed |
+| R03-F2 | major | verified r07 | closed |
+| R03-F3 | blocker | open: re-verify in r08 | open |
+| R03-F4 | major | open: re-verify in r08 | open |
+| R03-F5 | blocker | open: re-verify in r08 | open |
+| R03-F6 | major | verified r07 | closed |
+| R03-F7 | major | verified r07 | closed |
+| R03-F8 | major | verified r07 | closed |
+| R03-F9 | major | open: re-verify in r08 | open |
+| R03-F10 | major | open: re-verify in r08 | open |
+| R03-F11 | major | verified r07 | closed |
+| R03-C1 | condition | open: re-verify in r08 | open |
+| R03-C2 | condition | open: re-verify in r08 | open |
+| R03-C3 | condition | open: re-verify in r08 | open |
+| R03-C4 | condition | verified r07 | closed |
+| R03-C5 | condition | open: re-verify in r08 | open |
+| R03-C6 | condition | verified r07 | closed |
+| R04-F1 | minor | verified r07 | closed |
+| R04-F2 | minor | verified r07 | closed |
+| R04-F3 | blocker | open: re-verify in r08 | open |
+| R04-F4 | minor | verified r07 | closed |
+| R04-F5 | major | open: re-verify in r08 | open |
+| R04-F6 | minor | verified r07 | closed |
+| R04-F7 | major | verified r07 | closed |
+| R04-F8 | minor | verified r07 | closed |
+| R04-F9 | major | open: re-verify in r08 | open |
+| R04-F10 | major | open: re-verify in r08 | open |
+| R04-F11 | major | verified r07 | closed |
+| R04-F12 | minor | verified r07 | closed |
+| R04-C1 | condition | open: re-verify in r08 | open |
+| R04-C2 | condition | open: re-verify in r08 | open |
+| R04-C3 | condition | open: re-verify in r08 | open |
+| R04-C4 | condition | verified r07 | closed |
+| R04-C5 | condition | open: re-verify in r08 | open |
+| R04-C6 | condition | verified r07 | closed |
+| R05-F1 | minor | verified r07 | closed |
+| R05-F2 | minor | verified r07 | closed |
+| R05-F3 | blocker | open: re-verify in r08 | open |
+| R05-F4 | major | verified r07 | closed |
+| R05-F5 | major | open: re-verify in r08 | open |
+| R05-F6 | minor | verified r07 | closed |
+| R05-F7 | minor | verified r07 | closed |
+| R05-F8 | minor | verified r07 | closed |
+| R05-F9 | minor | open: re-verify in r08 | open |
+| R05-F10 | minor | open: re-verify in r08 | open |
+| R05-F11 | blocker | verified r07 | closed |
+| R05-F12 | minor | verified r07 | closed |
+| R05-F13 | major | open: re-verify in r08 | open |
+| R05-F14 | major | verified r07 | closed |
+| R05-F15 | major | verified r07 | closed |
+| R05-C1 | condition | open: re-verify in r08 | open |
+| R05-C2 | condition | open: re-verify in r08 | open |
+| R05-C3 | condition | open: re-verify in r08 | open |
+| R05-C4 | condition | verified r07 | closed |
+| R05-C5 | condition | open: re-verify in r08 | open |
+| R05-C6 | condition | verified r07 | closed |
+| R06-F1 | blocker | verified r07 | closed |
+| R06-F2 | blocker | open: re-verify in r08 | open |
+| R06-F3 | blocker | open: re-verify in r08 | open |
+| R06-F4 | major | open: re-verify in r08 | open |
+| R06-F5 | major | open: re-verify in r08 | open |
+| R06-F6 | major | open: re-verify in r08 | open |
+| R06-F7 | major | open: re-verify in r08 | open |
+| R06-F8 | minor | open: re-verify in r08 | open |
+| R07-F1 | blocker | open: re-verify in r08 | open |
+| R07-F2 | blocker | open: re-verify in r08 | open |
+| R07-F3 | blocker | open: re-verify in r08 | open |
+| R07-F4 | major | open: re-verify in r08 | open |
+| R07-F5 | major | open: re-verify in r08 | open |
+| R07-F6 | major | open: re-verify in r08 | open |
+| R07-F7 | major | open: re-verify in r08 | open |
+| R07-C1 | condition | open: re-verify in r08 | open |
+| R07-C2 | condition | open: re-verify in r08 | open |
+| R07-C3 | condition | open: re-verify in r08 | open |
 
 ## Log
 

@@ -1,0 +1,685 @@
+diff --git a/docs-check.py b/docs-check.py
+index 39441ff..84cbdcb 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -5,7 +5,7 @@
+   docs-check.py transfer REPO WORKSTREAM    record + safe to hand off
+   docs-check.py done REPO WORKSTREAM        record + every obligation closed
+   docs-check.py dispositions ARTIFACT ROUND print empty disposition rows
+-  docs-check.py report REPO [--write-baseline | --lower] [--memory DIR]
++  docs-check.py report REPO [--write-baseline | --lower | --add-memory] [--memory DIR]
+ 
+ WORKSTREAM is a path relative to REPO (e.g. workstreams/2026-10-03-x.md).
+ Exit status 0 means pass; 1 means at least one error was printed.
+@@ -27,7 +27,6 @@ BUDGET = {"STATUS.md": 4000, "AGENTS.md": 12000, "PROTOCOL.md": 12000,
+ REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Kimi review")
+ FINDING = re.compile(r"^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
+ CONDITION = re.compile(r"^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
+-OPEN_WORDS = re.compile(r"(?i)\b(remains?|still|open|partial(?:ly)?|unresolved|not (?:yet )?(?:resolved|satisfied|met|addressed)|cannot|unmet)\b")
+ VALIDATOR = GATEWAY / "reviewer-validate.py"
+ ROW_ID = re.compile(r"^R(\d+)-([FC]\d+)$")
+ CLOSURE = "raw review compared with its rows; no unlabeled actionable item"
+@@ -276,6 +275,21 @@ def record(repo):
+     legacy = set(base.get("legacy_collab", []))
+     indexed = set()
+     pin = standards_pin(repo)
++    in_git = git(repo, "rev-parse", "--git-dir")[0] == 0
++    # C/F: an adopted repository (one with workstreams/) must have a baseline,
++    # whose legacy list may only shrink from its first committed version.
++    if (repo / "workstreams").is_dir() and not base:
++        errors.append(f"{BASELINE} is missing; run 'docs-check.py report <repo> --write-baseline' at adoption")
++    if in_git and base and git(repo, "ls-files", "--error-unmatch", BASELINE)[0] == 0:
++        code, first_rev = git(repo, "log", "--diff-filter=A", "--format=%H", "--", BASELINE)
++        first_rev = first_rev.split()[-1] if first_rev else ""
++        code, first = git(repo, "show", f"{first_rev}:{BASELINE}") if first_rev else (1, "")
++        if code == 0:
++            grown = legacy - set(json.loads(first).get("legacy_collab", []))
++            if grown:
++                errors.append(f"{BASELINE}: legacy list grew after its first commit: {sorted(grown)[:3]}")
++    if repo == GATEWAY and base and "agent_cache" not in base:
++        errors.append(f"{BASELINE}: the gateway baseline must record the agent cache (report --memory DIR --add-memory)")
+     for wpath in workstreams(repo):
+         ws = Workstream(repo, wpath)
+         name = wpath.relative_to(repo)
+@@ -295,11 +309,15 @@ def record(repo):
+                 errors.append(f"{name}: r{rnd:02d} artifact {rel} checksum missing, malformed, or mismatched")
+             for f in (art, side):
+                 frel = str(f.relative_to(repo))
+-                if git(repo, "ls-files", "--error-unmatch", frel)[0] == 0:
++                if in_git and git(repo, "ls-files", "--error-unmatch", frel)[0] != 0:
++                    errors.append(f"{name}: {frel} is not tracked; review evidence must be committed")
++                elif in_git:
+                     if git(repo, "diff", "--quiet", "HEAD", "--", frel)[0] != 0:
+                         errors.append(f"{name}: {frel} has uncommitted changes (artifacts are never edited)")
+-                    if git(repo, "log", "--format=%H", "--diff-filter=M", "--", frel)[1]:
+-                        errors.append(f"{name}: {frel} was modified after its first commit")
++                    if git(repo, "log", "--format=%H", "--diff-filter=MDR", "--", frel)[1]:
++                        errors.append(f"{name}: {frel} was modified, deleted, or renamed after its first commit")
++                    if len(git(repo, "log", "--format=%H", "--diff-filter=A", "--", frel)[1].split()) > 1:
++                        errors.append(f"{name}: {frel} was added more than once (replaced)")
+             items, dupes = labeled_items(art)
+             errors.extend(f"{name}: r{rnd:02d} has duplicate label {d}" for d in dupes)
+             post_adoption = arel not in legacy
+@@ -367,77 +385,81 @@ def transfer(repo, wrel):
+     inv = re.search(r"(?m)^Inventory: `([^`]+)`; (\d+) untracked, (\d+) ignored; needed by next owner: (.+)$", block)
+     if not inv:
+         errors.append("transfer: Inventory must read 'Inventory: `<command>`; <n> untracked, <n> ignored; needed by next owner: <paths> | none'")
+-    elif inv.group(4).strip() != "none":
++    else:
++        _, status = git(repo, "status", "--porcelain", "--ignored")
++        lines = status.splitlines()
++        actual = (sum(l.startswith("?? ") for l in lines), sum(l.startswith("!! ") for l in lines))
++        if (int(inv.group(2)), int(inv.group(3))) != actual:
++            errors.append(f"transfer: inventory says {inv.group(2)} untracked, {inv.group(3)} ignored; git status shows {actual[0]} and {actual[1]}")
++    if inv and inv.group(4).strip() != "none":
+         for path in [x.strip() for x in inv.group(4).split(",")]:
+             if git(repo, "ls-files", "--error-unmatch", path)[0] != 0:
+                 errors.append(f"transfer: needed file {path} is not committed")
+     obs = re.search(r"(?m)^Runtime observation: (.+)$", block)
++    operational = (ws.header.get("Operational") or ["yes"])[-1].strip().lower() != "no"
+     if not obs:
+         errors.append("transfer: latest handoff block lacks 'Runtime observation:'")
+-    elif obs.group(1).strip() != "n/a (not operational)":
+-        t = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", obs.group(1))
++    elif obs.group(1).strip() == "n/a (not operational)":
++        if operational:
++            errors.append("transfer: 'n/a (not operational)' needs 'Operational: no' in the workstream header")
++    else:
++        t = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) `[^`]+` -> \S", obs.group(1))
+         if not t:
+-            errors.append("transfer: Runtime observation must start with 'YYYY-MM-DD HH:MM' or be 'n/a (not operational)'")
+-        elif (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds() > MAX_OBSERVATION_AGE:
+-            errors.append("transfer: Runtime observation is older than two hours; observe again immediately before handoff")
++            errors.append("transfer: Runtime observation must read 'YYYY-MM-DD HH:MM `<command>` -> <result>'")
++        else:
++            age = (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds()
++            if age < -60:
++                errors.append("transfer: Runtime observation time is in the future")
++            elif age > MAX_OBSERVATION_AGE:
++                errors.append("transfer: Runtime observation is older than two hours; observe again immediately before handoff")
+     if not re.search(r"(?m)^Restart sequence: \S", block):
+         errors.append("transfer: latest handoff block lacks 'Restart sequence:'")
+     return errors
+ 
+ 
+-def item_text(ws, rid):
+-    rnd, item = int(ROW_ID.match(rid).group(1)), ROW_ID.match(rid).group(2)
+-    items, _ = labeled_items(ws.repo / ws.reviews[rnd])
+-    return items.get(item, ("", ""))[1]
++def decision_entries(ws):
++    """Dated Decisions entries: '- YYYY-MM-DD, user, scope: ...' plus continuation lines."""
++    entries, current = [], None
++    for line in ws.sections.get("Decisions", []):
++        m = re.match(r"^- (\d{4}-\d{2}-\d{2}), user, scope: (.+)$", line)
++        if m:
++            current = [m.group(1), line]
++            entries.append(current)
++        elif current and line.startswith("  "):
++            current[1] += " " + line.strip()
++        elif not line.strip():
++            current = None
++    return entries
+ 
+ 
+-def disposition_errors(ws, rid, seen=(), strict_from=None):
+-    """Errors for one row. strict_from carries the original strict item through
+-    a carried chain, so the chain's end must satisfy the original's severity."""
++def disposition_errors(ws, rid):
++    """Errors for one row's final disposition (v6 §3.4, tightened by r06/r07)."""
+     row = ws.rows[rid]
+     rnd = int(ROW_ID.match(rid).group(1))
+     sev, disp = row["severity"], row["disposition"]
+-    strict = sev in ("blocker", "condition") or strict_from is not None
+-    m = re.match(r'^verified r(\d+) "(.+)"$', disp)
++    strict = sev in ("blocker", "condition")
++    m = re.match(r"^verified r(\d+)$", disp)
+     if m:
+-        later, quote = int(m.group(1)), m.group(2)
++        # The later review must contain the exact status line "<ID> is resolved."
++        # at the start of a line: affirmative, specific, and in the reviewer's words.
++        later = int(m.group(1))
+         if later <= rnd or later not in ws.reviews:
+             return [f"{rid}: verified cites r{later:02d}, which is not a later indexed round"]
+-        if norm(quote) not in norm(artifact_text(ws.repo / ws.reviews[later])):
+-            return [f"{rid}: verified quote does not occur in r{later:02d}"]
+-        if rid not in quote or OPEN_WORDS.search(quote):
+-            return [f"{rid}: verified quote must name {rid} and affirm resolution without open-status words"]
++        if not re.search(rf"(?m)^\W*{re.escape(rid)} is resolved\.?\W*$", artifact_text(ws.repo / ws.reviews[later])):
++            return [f"{rid}: r{later:02d} has no line '{rid} is resolved.'"]
+         return []
+     m = re.match(r'^user-decided (\d{4}-\d{2}-\d{2}) "(.+)"$', disp)
+     if m:
+-        if norm(m.group(2)) not in norm(ws.section("Decisions")):
+-            return [f"{rid}: user-decided quote does not occur in the Decisions section"]
+-        if rid not in m.group(2):
++        # The quote must sit in a Decisions entry of the same date with a stated
++        # scope, and name this item. Authenticity of the transcription is policy.
++        day, quote = m.group(1), m.group(2)
++        if rid not in quote:
+             return [f"{rid}: user-decided quote must name {rid}"]
++        if not any(d == day and norm(quote) in norm(text) for d, text in decision_entries(ws)):
++            return [f"{rid}: no Decisions entry dated {day} with a scope contains the quote"]
+         return []
+-    m = re.match(r"^carried (R\d+-[FC]\d+)$", disp)
+-    if m:
+-        target = m.group(1)
+-        if target == rid or target not in ws.rows or int(ROW_ID.match(target).group(1)) < rnd:
+-            return [f"{rid}: carried target {target} is not this or a later round's row"]
+-        if target in seen:
+-            return [f"{rid}: carried chain loops"]
+-        # Explicit mapping, checked in the reviewer's own words: within a round
+-        # the restating item cites the target's short ID ("C1: ... under F1");
+-        # across rounds the re-raised target cites this item's full ID
+-        # ("R01-F1 is partially resolved").
+-        if int(ROW_ID.match(target).group(1)) == rnd:
+-            cite, where, text = ROW_ID.match(target).group(2), rid, item_text(ws, rid)
+-        else:
+-            cite, where, text = rid, target, item_text(ws, target)
+-        if not re.search(rf"\b{re.escape(cite)}\b", text):
+-            return [f"{rid}: carried requires {where}'s review text to cite {cite}"]
+-        origin = strict_from or (rid if sev in ("blocker", "condition") else None)
+-        sub = disposition_errors(ws, target, seen + (rid,), origin)
+-        return [f"{rid}: carried target is not closed ({e})" for e in sub]
+     if strict:
+-        label = f"{sev} (carried from {strict_from})" if strict_from else sev
+-        return [f"{rid}: a {label} closes only by verified, user-decided, or carried (got {disp!r})"]
++        return [f"{rid}: a {sev} closes only by 'verified rNN' or 'user-decided <date> \"<quote>\"' (got {disp!r})"]
+     m = re.match(r"^fixed ([0-9a-f]{7,40})$", disp)
+     if m:
+         if git(ws.repo, "cat-file", "-e", m.group(1) + "^{commit}")[0] != 0:
+@@ -498,6 +520,15 @@ def report(repo, write=False, lower=False, memory=None):
+             base["agent_cache"] = mem
+         path.write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
+         print(f"wrote {path}")
++    elif "--add-memory" in sys.argv:
++        base = load_baseline(repo)
++        if not mem:
++            raise SystemExit("--add-memory needs --memory DIR")
++        if "agent_cache" in base:
++            raise SystemExit("agent cache already in baseline; use --lower")
++        base["agent_cache"] = mem
++        path.write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
++        print(f"added agent cache to {path}")
+     elif lower:
+         base = load_baseline(repo)
+         for rel in list(base.get("files", {})):
+diff --git a/templates/workstream.md b/templates/workstream.md
+index 433b94a..f8e1e08 100644
+--- a/templates/workstream.md
++++ b/templates/workstream.md
+@@ -4,6 +4,7 @@ Workstream: <YYYY-MM-DD>-<slug>
+ Owner: <Codex|Claude> (<date>, assigned by the user at <commit>)
+ Status: active
+ Branch: <branch>
++Operational: <yes|no>
+ Links: <experiment, issue, or document links>
+ 
+ ## Brief
+@@ -12,8 +13,8 @@ Links: <experiment, issue, or document links>
+ 
+ ## Decisions
+ 
+-- <date>, user, scope: <what this covers>. Quote: "<user's words>".
+-  Supersedes: <earlier decision or none>.
++- <YYYY-MM-DD>, user, scope: <what this covers>.
++  Quote: "<user's words>". Supersedes: <earlier decision or none>.
+ 
+ ## Reviews
+ 
+@@ -23,11 +24,9 @@ Links: <experiment, issue, or document links>
+ ## Findings and conditions
+ 
+ <!-- One row per labeled item; generate with: docs-check.py dispositions <artifact> <round>.
+-     Blocker/condition: verified rNN "<later review's words naming this ID and affirming resolution>"
+-       | user-decided <date> "<user's words in Decisions, naming this ID>"
+-       | carried RNN-Xn (same round: this item's text cites Xn; later round: that item's text cites this ID;
+-         the chain must end in evidence valid for this item's severity)
+-     Major/minor: any of the above, fixed <commit in pushed history>,
++     Blocker/condition: verified rNN   (review NN contains the line "<ID> is resolved.")
++       | user-decided <date> "<quote naming this ID>"   (inside a Decisions entry of that date with a scope)
++     Major/minor: either of the above, fixed <commit in pushed history>,
+        or rejected: <the scoped decision or changed fact that makes it inapplicable> -->
+ 
+ | ID | Severity | Disposition | Status |
+@@ -45,6 +44,6 @@ Current state: <one paragraph>
+ Decisions: <links to Decisions entries in force>
+ Open obligations: <row IDs still open, with state>
+ Inventory: `git status --short --ignored`; <n> untracked, <n> ignored; needed by next owner: <committed paths, comma-separated> | none
+-Runtime observation: <YYYY-MM-DD HH:MM, within two hours> <commands and result> | n/a (not operational)
++Runtime observation: <YYYY-MM-DD HH:MM> `<command>` -> <result>   (within two hours) | n/a (not operational) if Operational: no
+ Restart sequence: <numbered steps>
+ -->
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index 9d4a83d..a1b0f5a 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -1,5 +1,6 @@
+ #!/usr/bin/env python3
+-"""Provider-free tests for docs-check.py (workspace framework v6)."""
++"""Provider-free tests for docs-check.py (workspace framework v6, as tightened
++by implementation reviews r06 and r07)."""
+ 
+ import hashlib
+ import json
+@@ -34,8 +35,13 @@ Owner: claude
+ Wrapper revision: {{rev}}
+ 
+ {PAD}
+-F1 [minor]: R01-F1 is resolved: the handoff now commits pending work.
+-F2 [major]: R01-F2 remains open: budgets still drift.
++R01-F1 is resolved.
++R01-C1 is resolved.
++R01-F2 remains open: budgets still drift.
++R01-F3 was discussed at length.
++
++F1 [minor]: the handoff wording could be tighter.
++F2 [major]: budgets still drift.
+ {A}
+ 
+ VERDICT: REJECT
+@@ -62,6 +68,16 @@ LEGACY = """# Codex review
+ 
+ VERDICT: REJECT
+ """
++GOOD_ROWS = [
++    ("R01-F1", "blocker", "verified r02", "closed"),
++    ("R01-F2", "major", "rejected: budgets are out of scope per the scope decision of 2026-10-03", "closed"),
++    ("R01-F3", "minor", "rejected: superseded by the scope decision recorded on 2026-10-03", "closed"),
++    ("R01-C1", "condition", "verified r02", "closed"),
++    ("R02-F1", "minor", "rejected: wording preference outside the agreed pilot scope", "closed"),
++    ("R02-F2", "major", "rejected: budgets are out of scope per the scope decision of 2026-10-03", "closed"),
++]
++CLOSURE_LOG = ("- r01: raw review compared with its rows; no unlabeled actionable item\n"
++               "- r02: raw review compared with its rows; no unlabeled actionable item\n")
+ 
+ 
+ def run(*args):
+@@ -90,7 +106,11 @@ class Fixture:
+             hashlib.sha256(p.read_bytes()).hexdigest() + "  " + name + "\n")
+         return p
+ 
+-    def workstream(self, rows, reviews=None, decisions="", log="", extra=""):
++    def baseline(self, legacy=()):
++        (self.repo / "docs-baseline.json").write_text(json.dumps({"created": "2026-10-03", "legacy_collab": list(legacy)}))
++        (self.repo / "AGENTS.md").write_text(f"# Agents\n\nStandards: reviewer-agent-gateway@{self.rev}\n")
++
++    def workstream(self, rows, reviews=None, decisions="", log="", extra="", header=""):
+         reviews = reviews or [("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "REJECT")]
+         idx = "".join(f"| {r} | Codex | hard | `.collab/{p}` | {v} |\n" for r, p, v in reviews)
+         table = "".join(f"| {i} | {s} | {d} | {st} |\n" for i, s, d, st in rows)
+@@ -99,7 +119,7 @@ class Fixture:
+ Workstream: x
+ Owner: Claude (2026-10-03)
+ Status: active
+-
++{header}
+ ## Decisions
+ 
+ {decisions}
+@@ -120,58 +140,51 @@ Status: active
+ {extra}""")
+ 
+     def adopt(self):
+-        (self.repo / "AGENTS.md").write_text(f"# Agents\n\nStandards: reviewer-agent-gateway@{self.rev}\n")
+         git(self.repo, "init", "-q", "-b", "main")
+         git(self.repo, "add", "-A")
+         git(self.repo, "commit", "-q", "-m", "x")
+ 
+ 
+-GOOD_ROWS = [
+-    ("R01-F1", "blocker", 'verified r02 "R01-F1 is resolved: the handoff now commits pending work."', "closed"),
+-    ("R01-F2", "major", "carried R02-F2", "closed"),
+-    ("R01-F3", "minor", "rejected: superseded by the scope decision recorded on 2026-10-03", "closed"),
+-    ("R01-C1", "condition", "carried R01-F1", "closed"),
+-    ("R02-F1", "minor", "rejected: informational confirmation that R01-F1 closed; nothing to act on", "closed"),
+-    ("R02-F2", "major", "rejected: budgets are out of scope per the scope decision of 2026-10-03", "closed"),
+-]
+-CLOSURE_LOG = ("- r01: raw review compared with its rows; no unlabeled actionable item\n"
+-               "- r02: raw review compared with its rows; no unlabeled actionable item\n")
+-
+-
+ class DocsCheckTest(unittest.TestCase):
+     def setUp(self):
+         self.tmp = tempfile.TemporaryDirectory()
+         self.f = Fixture(self.tmp.name)
+         self.f.artifact("codex-x-r01.md", REVIEW1)
+         self.f.artifact("codex-x-r02.md", REVIEW2)
++        self.f.baseline()
+ 
+     def tearDown(self):
+         self.tmp.cleanup()
+ 
+-    def done_out(self):
++    def record(self):
++        return run("record", self.f.repo)
++
++    def done(self):
+         return run("done", self.f.repo, "workstreams/x.md")
+ 
++    # ------------------------------------------------------------- record
++
+     def test_record_and_done_pass(self):
+         self.f.workstream(GOOD_ROWS, log=CLOSURE_LOG)
+-        code, out = run("record", self.f.repo)
++        code, out = self.record()
+         self.assertEqual(code, 0, out)
+-        code, out = self.done_out()
++        code, out = self.done()
+         self.assertEqual(code, 0, out)
+ 
+     def test_clean_accept_without_items_passes_record(self):
+         self.f.artifact("codex-x-r03.md", CLEAN_ACCEPT)
+         self.f.workstream(GOOD_ROWS, reviews=[("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "REJECT"),
+                                               ("r03", "codex-x-r03.md", "ACCEPT")])
+-        code, out = run("record", self.f.repo)
++        code, out = self.record()
+         self.assertEqual(code, 0, out)
+ 
+-    def test_missing_extra_duplicate_malformed_and_wrong_severity_rows(self):
++    def test_rows_missing_extra_duplicate_malformed_wrong_severity(self):
+         rows = [r for r in GOOD_ROWS if r[0] != "R01-C1"] + [("R01-F9", "minor", "x", "open"), ("R02-F1", "minor", "x", "open")]
+         rows = [("R01-F2", "minor", r[2], r[3]) if r[0] == "R01-F2" else r for r in rows]
+-        self.f.workstream(rows, extra="")
++        self.f.workstream(rows)
+         ws = self.f.repo / "workstreams" / "x.md"
+         ws.write_text(ws.read_text().replace("| R01-F9 |", "| RX-9 | minor | x | open |\n| R01-F9 |"))
+-        code, out = run("record", self.f.repo)
++        code, out = self.record()
+         self.assertEqual(code, 1)
+         for expected in ("no disposition row for R01-C1", "row R01-F9 matches no item", "R01-F2 severity",
+                          "duplicate findings row R02-F1", "malformed findings row"):
+@@ -181,134 +194,157 @@ class DocsCheckTest(unittest.TestCase):
+         self.f.workstream(GOOD_ROWS)
+         (self.f.repo / ".collab" / "codex-x-r01.md").write_text(REVIEW1.replace("{rev}", self.f.rev) + "tampered\n")
+         (self.f.repo / ".collab" / "codex-x-r02.md.sha256").write_text("")
+-        out = run("record", self.f.repo)[1]
++        out = self.record()[1]
+         self.assertIn("r01 artifact .collab/codex-x-r01.md checksum missing, malformed, or mismatched", out)
+         self.assertIn("r02 artifact .collab/codex-x-r02.md checksum missing, malformed, or mismatched", out)
+ 
+-    def test_committed_artifact_edit_is_detected(self):
+-        self.f.workstream(GOOD_ROWS)
+-        self.f.adopt()
+-        self.f.artifact("codex-x-r01.md", REVIEW1 + "\nedited later\n")
+-        out = run("record", self.f.repo)[1]
+-        self.assertIn("codex-x-r01.md has uncommitted changes", out)
+-        git(self.f.repo, "commit", "-q", "-am", "edit")
+-        self.assertIn("codex-x-r01.md was modified after its first commit", run("record", self.f.repo)[1])
+-
+     def test_unindexed_and_ambiguous_collab_files_and_pin(self):
+         self.f.workstream(GOOD_ROWS)
+         self.f.artifact("codex-x-r03.md", REVIEW2)
+         (self.f.repo / ".collab" / "notes.md").write_text("# notes\n")
+-        out = run("record", self.f.repo)[1]
++        out = self.record()[1]
+         self.assertIn("codex-x-r03.md is not in any workstream review index", out)
+         self.assertIn("notes.md is not a recognizable review artifact", out)
+-        (self.f.repo / "docs-baseline.json").write_text(json.dumps(
+-            {"legacy_collab": [".collab/codex-x-r03.md", ".collab/notes.md"]}))
+-        self.assertIn("has no 'Standards: reviewer-agent-gateway@<commit>' pin", run("record", self.f.repo)[1])
+-        (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{self.f.rev}\n")
+-        code, out = run("record", self.f.repo)
++        (self.f.repo / "AGENTS.md").write_text("# no pin\n")
++        self.assertIn("has no 'Standards: reviewer-agent-gateway@<commit>' pin", self.record()[1])
++        self.f.baseline(legacy=[".collab/codex-x-r03.md", ".collab/notes.md"])
++        code, out = self.record()
+         self.assertEqual(code, 0, out)
+ 
+-    def test_baseline_refuses_untracked_collab(self):
++    def test_adopted_repo_needs_baseline(self):
+         self.f.workstream(GOOD_ROWS)
+-        self.f.adopt()
+-        self.f.artifact("codex-x-r09.md", REVIEW2)
+-        self.assertNotEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
++        (self.f.repo / "docs-baseline.json").unlink()
++        self.assertIn("docs-baseline.json is missing", self.record()[1])
+ 
+     def test_legacy_numbered_review(self):
+         self.f.artifact("codex-x-r01.md", LEGACY)
+-        (self.f.repo / "docs-baseline.json").write_text(json.dumps({"legacy_collab": [".collab/codex-x-r01.md"]}))
+-        (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{self.f.rev}\n")
++        self.f.baseline(legacy=[".collab/codex-x-r01.md"])
+         self.f.workstream([("R01-F1", "blocker", "x", "open"), ("R01-F2", "major", "x", "open"),
+                            ("R02-F1", "minor", "x", "open"), ("R02-F2", "major", "x", "open")])
+-        code, out = run("record", self.f.repo)
++        code, out = self.record()
+         self.assertEqual(code, 0, out)
+ 
+     def test_provenance_and_contract_for_post_adoption_reviews(self):
+         self.f.artifact("codex-x-r02.md", REVIEW2.replace("{rev}", "{rev} (dirty)"))
+         self.f.workstream(GOOD_ROWS)
+-        self.assertIn("unversioned or dirty wrapper", run("record", self.f.repo)[1])
++        self.assertIn("unversioned or dirty wrapper", self.record()[1])
+         self.f.artifact("codex-x-r02.md", REVIEW2.replace("Wrapper revision: {rev}\n", "").replace(A, ""))
+-        out = run("record", self.f.repo)[1]
++        out = self.record()[1]
+         self.assertIn("r02 has no wrapper revision", out)
+         self.assertIn("r02 fails the output contract", out)
+ 
+-    def test_done_rejects_weak_closures(self):
+-        bad = [
+-            ("R01-F1", "blocker", 'verified r02 "this sentence is not in the review"', "closed"),
+-            ("R01-F2", "major", 'verified r02 "R01-F2 remains open: budgets still drift."', "closed"),
+-            ("R01-F3", "minor", "rejected: too costly", "closed"),
+-            ("R01-C1", "condition", "fixed abc1234", "closed"),
+-            ("R02-F1", "minor", "rejected: informational confirmation that R01-F1 closed; nothing to act on", "open"),
+-            ("R02-F2", "major", 'user-decided 2026-10-03 "accept drift for the pilot"', "closed"),
+-        ]
+-        self.f.workstream(bad, decisions='- 2026-10-03, user: "accept drift for the pilot"')
+-        out = self.done_out()[1]
+-        self.assertIn("R01-F1: verified quote does not occur in r02", out)
+-        self.assertIn("R01-F2: verified quote must name R01-F2 and affirm resolution", out)
+-        self.assertIn("R01-F3: no valid final disposition", out)
+-        self.assertIn("R01-C1: a condition closes only by", out)
+-        self.assertIn("R02-F1: status is 'open'", out)
+-        self.assertIn("R02-F2: user-decided quote must name R02-F2", out)
+-        self.assertIn("closure: log lacks 'r01:", out)
++    def test_committed_artifact_edit_is_detected(self):
++        self.f.workstream(GOOD_ROWS)
++        self.f.adopt()
++        # Edit the artifact and its sidecar together, so the checksum still matches.
++        self.f.artifact("codex-x-r01.md", REVIEW1.replace("wording is loose", "wording is LOOSE"))
++        self.assertIn("codex-x-r01.md has uncommitted changes", self.record()[1])
++        git(self.f.repo, "commit", "-q", "-am", "edit")
++        self.assertIn("codex-x-r01.md was modified, deleted, or renamed after its first commit", self.record()[1])
+ 
+-    def test_carried_rules(self):
+-        rows = list(GOOD_ROWS)
+-        # Blocker carried into an unrelated finding that does not cite it.
+-        rows[0] = ("R01-F1", "blocker", "carried R02-F2", "closed")
+-        # Condition carried to a same-round finding it does not cite.
+-        rows[3] = ("R01-C1", "condition", "carried R01-F2", "closed")
+-        self.f.workstream(rows, log=CLOSURE_LOG)
+-        out = self.done_out()[1]
+-        self.assertIn("R01-F1: carried requires R02-F2's review text to cite R01-F1", out)
+-        self.assertIn("R01-C1: carried requires R01-C1's review text to cite F2", out)
+-        # A blocker carried into a cited minor must still close by strict evidence.
+-        rows = list(GOOD_ROWS)
+-        rows[0] = ("R01-F1", "blocker", "carried R02-F1", "closed")
+-        self.f.workstream(rows, log=CLOSURE_LOG)
+-        self.assertIn("R01-F1: carried target is not closed (R02-F1: a minor (carried from R01-F1) closes only by",
+-                      self.done_out()[1])
++    def test_untracked_and_replaced_artifacts(self):
++        self.f.workstream(GOOD_ROWS)
++        self.f.adopt()
++        git(self.f.repo, "rm", "-q", "--cached", ".collab/codex-x-r02.md", ".collab/codex-x-r02.md.sha256")
++        git(self.f.repo, "commit", "-q", "-m", "untrack")
++        self.assertIn("codex-x-r02.md is not tracked; review evidence must be committed", self.record()[1])
++        git(self.f.repo, "add", "-A")
++        git(self.f.repo, "commit", "-q", "-m", "re-add")
++        self.assertIn("codex-x-r02.md was modified, deleted, or renamed", self.record()[1])
++
++    def test_baseline_refuses_untracked_collab_and_legacy_cannot_grow(self):
++        self.f.workstream(GOOD_ROWS)
++        (self.f.repo / "docs-baseline.json").unlink()
++        self.f.adopt()
++        self.f.artifact("codex-x-r09.md", REVIEW2)
++        self.assertNotEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
++        (self.f.repo / ".collab" / "codex-x-r09.md").unlink()
++        (self.f.repo / ".collab" / "codex-x-r09.md.sha256").unlink()
++        self.assertEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
++        git(self.f.repo, "add", "-A")
++        git(self.f.repo, "commit", "-q", "-m", "baseline")
++        b = json.loads((self.f.repo / "docs-baseline.json").read_text())
++        (self.f.repo / "docs-baseline.json").write_text(json.dumps(dict(b, legacy_collab=b["legacy_collab"] + [".collab/new.md"])))
++        self.assertIn("legacy list grew after its first commit", self.record()[1])
+ 
+-    def test_user_decided_names_finding(self):
+-        rows = list(GOOD_ROWS)
+-        rows[0] = ("R01-F1", "blocker", 'user-decided 2026-10-03 "R01-F1: accept the handoff risk for the pilot"', "closed")
+-        self.f.workstream(rows, decisions='- 2026-10-03, user: "R01-F1: accept the handoff risk for the pilot"', log=CLOSURE_LOG)
+-        code, out = self.done_out()
+-        self.assertEqual(code, 0, out)
++    def test_broken_link(self):
++        self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
++        self.assertIn("does not resolve", self.record()[1])
++
++    # ------------------------------------------------------------- budgets
+ 
+     def test_budgets_and_ratchets(self):
+         self.f.workstream(GOOD_ROWS)
+         (self.f.repo / "STATUS.md").write_text("x" * 4001)
+-        self.assertIn("STATUS.md has 4001 characters", run("record", self.f.repo)[1])
++        self.assertIn("STATUS.md has 4001 characters", self.record()[1])
+         (self.f.repo / "STATUS.md").write_text("x" * 100)
++        (self.f.repo / "docs-baseline.json").unlink()
+         (self.f.repo / "CLAUDE.md").write_text("z" * 61000)
+-        self.f.adopt()
+         (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{self.f.rev}\n" + "y" * 13000)
+-        git(self.f.repo, "commit", "-q", "-am", "big")
+-        self.assertIn("AGENTS.md has", run("record", self.f.repo)[1])
++        self.f.adopt()
+         self.assertEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
+-        code, out = run("record", self.f.repo)
++        git(self.f.repo, "add", "-A")
++        git(self.f.repo, "commit", "-q", "-m", "baseline")
++        code, out = self.record()
+         self.assertEqual(code, 0, out)
+         self.assertNotEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
+-        size = len((self.f.repo / "AGENTS.md").read_text())
+-        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text() + "y")
+-        self.assertIn(f"limit {size}", run("record", self.f.repo)[1])
+-        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text()[:12500])
++        agents = self.f.repo / "AGENTS.md"
++        size = len(agents.read_text())
++        agents.write_text(agents.read_text() + "y")
++        self.assertIn(f"limit {size}", self.record()[1])
++        agents.write_text(agents.read_text()[:12500])
+         run("report", self.f.repo, "--lower")
+         self.assertEqual(json.loads((self.f.repo / "docs-baseline.json").read_text())["files"]["AGENTS.md"], 12500)
+-        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text() + "y" * 50)
++        agents.write_text(agents.read_text() + "y" * 50)
+         run("report", self.f.repo, "--lower")
+         self.assertEqual(json.loads((self.f.repo / "docs-baseline.json").read_text())["files"]["AGENTS.md"], 12500)
+-        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text()[:12500])
+-        # T2 over budget: shrinking one file does not let another grow.
++        agents.write_text(agents.read_text()[:12500])
+         (self.f.repo / "docs").mkdir()
+         (self.f.repo / "docs" / "a.md").write_text("q" * 10)
+         (self.f.repo / "CLAUDE.md").write_text("z" * 60000)
+-        out = run("record", self.f.repo)[1]
+-        self.assertIn("T2 file docs/a.md grew to 10 characters while T2 is over budget", out)
++        self.assertIn("T2 file docs/a.md grew to 10 characters while T2 is over budget", self.record()[1])
+ 
+-    def test_broken_link(self):
+-        self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
+-        self.assertIn("does not resolve", run("record", self.f.repo)[1])
++    # ---------------------------------------------------------------- done
++
++    def test_done_rejects_weak_closures(self):
++        bad = [
++            ("R01-F1", "blocker", "verified r01", "closed"),
++            ("R01-F2", "major", "verified r02", "closed"),
++            ("R01-F3", "minor", "verified r02", "closed"),
++            ("R01-C1", "condition", "fixed abc1234", "closed"),
++            ("R02-F1", "minor", "rejected: too costly", "open"),
++            ("R02-F2", "major", 'user-decided 2026-10-03 "accept drift for the pilot"', "closed"),
++        ]
++        self.f.workstream(bad, decisions='- 2026-10-03, user, scope: pilot. Quote: "accept drift for the pilot"')
++        out = self.done()[1]
++        self.assertIn("R01-F1: verified cites r01, which is not a later indexed round", out)
++        self.assertIn("R01-F2: r02 has no line 'R01-F2 is resolved.'", out)
++        self.assertIn("R01-F3: r02 has no line 'R01-F3 is resolved.'", out)
++        self.assertIn("R01-C1: a condition closes only by", out)
++        self.assertIn("R02-F1: status is 'open'", out)
++        self.assertIn("R02-F1: no valid final disposition", out)
++        self.assertIn("R02-F2: user-decided quote must name R02-F2", out)
++        self.assertIn("closure: log lacks 'r01:", out)
++
++    def test_user_decided_needs_dated_scoped_entry(self):
++        rows = list(GOOD_ROWS)
++        rows[0] = ("R01-F1", "blocker", 'user-decided 2026-10-03 "R01-F1: accept the handoff risk for the pilot"', "closed")
++        quote = '"R01-F1: accept the handoff risk for the pilot"'
++        self.f.workstream(rows, decisions=f"- 2026-10-02, user, scope: pilot. Quote: {quote}", log=CLOSURE_LOG)
++        self.assertIn("no Decisions entry dated 2026-10-03 with a scope", self.done()[1])
++        self.f.workstream(rows, decisions=f"Free text: {quote}", log=CLOSURE_LOG)
++        self.assertIn("no Decisions entry dated 2026-10-03 with a scope", self.done()[1])
++        self.f.workstream(rows, decisions=f"- 2026-10-03, user, scope: pilot handoff.\n  Quote: {quote}", log=CLOSURE_LOG)
++        code, out = self.done()
++        self.assertEqual(code, 0, out)
++
++    def test_carried_is_no_longer_accepted(self):
++        rows = list(GOOD_ROWS)
++        rows[1] = ("R01-F2", "major", "carried R02-F2", "closed")
++        self.f.workstream(rows, log=CLOSURE_LOG)
++        self.assertIn("R01-F2: no valid final disposition (got 'carried R02-F2')", self.done()[1])
++
++    # ------------------------------------------------------------ transfer
+ 
+     def test_transfer(self):
+         self.f.workstream(GOOD_ROWS)
+@@ -321,26 +357,34 @@ class DocsCheckTest(unittest.TestCase):
+         git(self.f.repo, "remote", "add", "origin", str(remote))
+         git(self.f.repo, "push", "-q", "-u", "origin", "main")
+         ws = self.f.repo / "workstreams" / "x.md"
+-        stale = (datetime.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M")
+-        ws.write_text(ws.read_text() + f"\n### Handoff 2026-10-03\n\nInventory: none\nRuntime observation: {stale} deploy ok\n")
+-        out = run("transfer", self.f.repo, "workstreams/x.md")[1]
+-        self.assertIn("uncommitted tracked changes", out)
+-        self.assertIn("Inventory must read", out)
+-        self.assertIn("older than two hours", out)
+-        self.assertIn("lacks 'Restart sequence:'", out)
+-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+-        base_text = ws.read_text().split("### Handoff")[0]
+-        ws.write_text(base_text + "### Handoff 2026-10-03\n\n"
+-                      "Inventory: `git status --short --ignored`; 1 untracked, 3 ignored; needed by next owner: notes/missing.md\n"
+-                      f"Runtime observation: {now} health endpoint 200\nRestart sequence: read this file\n")
+-        git(self.f.repo, "commit", "-q", "-am", "handoff")
+-        git(self.f.repo, "push", "-q")
+-        self.assertIn("needed file notes/missing.md is not committed", run("transfer", self.f.repo, "workstreams/x.md")[1])
+-        ws.write_text(ws.read_text().replace("needed by next owner: notes/missing.md", "needed by next owner: none"))
+-        git(self.f.repo, "commit", "-q", "-am", "handoff2")
+-        git(self.f.repo, "push", "-q")
+-        code, out = run("transfer", self.f.repo, "workstreams/x.md")
+-        self.assertEqual(code, 0, out)
++        base_text = ws.read_text()
++
++        def handoff(inventory, observation, operational_no=False):
++            text = base_text.replace("Status: active\n", "Status: active\nOperational: no\n") if operational_no else base_text
++            ws.write_text(text + f"\n### Handoff 2026-10-03\n\nInventory: {inventory}\n"
++                          f"Runtime observation: {observation}\nRestart sequence: read this file\n")
++            git(self.f.repo, "commit", "-q", "-am", "handoff")
++            git(self.f.repo, "push", "-q")
++            return run("transfer", self.f.repo, "workstreams/x.md")[1]
++
++        now = datetime.now()
++        inv = "`git status --short --ignored`; 0 untracked, 0 ignored; needed by next owner: none"
++        stale = (now - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M")
++        future = (now + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
++        fresh = now.strftime("%Y-%m-%d %H:%M")
++        self.assertIn("older than two hours", handoff(inv, f"{stale} `curl /health` -> 200"))
++        self.assertIn("in the future", handoff(inv, f"{future} `curl /health` -> 200"))
++        self.assertIn("must read 'YYYY-MM-DD HH:MM `<command>` -> <result>'", handoff(inv, f"{fresh} deploy ok"))
++        self.assertIn("needs 'Operational: no'", handoff(inv, "n/a (not operational)"))
++        (self.f.repo / "scratch.txt").write_text("x")
++        self.assertIn("git status shows 1 and 0", handoff(inv, f"{fresh} `curl /health` -> 200"))
++        (self.f.repo / "scratch.txt").unlink()
++        self.assertIn("needed file notes/missing.md is not committed",
++                      handoff(inv.replace("next owner: none", "next owner: notes/missing.md"), f"{fresh} `curl /health` -> 200"))
++        self.assertIn("docs-check transfer: PASS", handoff(inv, "n/a (not operational)", operational_no=True))
++        self.assertIn("docs-check transfer: PASS", handoff(inv, f"{fresh} `curl /health` -> 200"))
++
++    # --------------------------------------------------------- dispositions
+ 
+     def test_dispositions_output(self):
+         code, out = run("dispositions", self.f.repo / ".collab" / "codex-x-r01.md", "r01")
