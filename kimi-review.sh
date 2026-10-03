@@ -52,10 +52,15 @@ safe() {
   REPLY="$f"
 }
 # Provenance (workspace framework v6 §7): record the gateway commit this wrapper
-# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
-# is for the provider-free tests only; it is recorded as "(dirty)".
-wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
-if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
+# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
+# copy outside any repository (consumer-shim fixtures) records "unversioned",
+# which docs-check rejects for reviews captured after adoption.
+wrapper_rev="unversioned"
+if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
+  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
+  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
+  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
+fi
 
 command -v ollama >/dev/null || fail 69 "Ollama CLI not found"
 command -v jq >/dev/null || fail 69 "jq is required"

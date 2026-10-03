@@ -23,8 +23,12 @@ Links: <experiment, issue, or document links>
 ## Findings and conditions
 
 <!-- One row per labeled item; generate with: docs-check.py dispositions <artifact> <round>.
-     Blocker/condition: verified rNN "<quote affirming resolution>" | user-decided <date> "<quote>" | carried RNN-Xn
-     Major/minor: the above, fixed <pushed commit>, or rejected: <scoped decision or changed fact> -->
+     Blocker/condition: verified rNN "<later review's words naming this ID and affirming resolution>"
+       | user-decided <date> "<user's words in Decisions, naming this ID>"
+       | carried RNN-Xn (same round: this item's text cites Xn; later round: that item's text cites this ID;
+         the chain must end in evidence valid for this item's severity)
+     Major/minor: any of the above, fixed <commit in pushed history>,
+       or rejected: <the scoped decision or changed fact that makes it inapplicable> -->
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
@@ -40,7 +44,7 @@ Links: <experiment, issue, or document links>
 Current state: <one paragraph>
 Decisions: <links to Decisions entries in force>
 Open obligations: <row IDs still open, with state>
-Inventory: <command run>; <n> untracked, <n> ignored; needed by next owner: <paths committed at …> | none
-Runtime observation: <time, commands, result> | n/a (not operational)
+Inventory: `git status --short --ignored`; <n> untracked, <n> ignored; needed by next owner: <committed paths, comma-separated> | none
+Runtime observation: <YYYY-MM-DD HH:MM, within two hours> <commands and result> | n/a (not operational)
 Restart sequence: <numbered steps>
 -->

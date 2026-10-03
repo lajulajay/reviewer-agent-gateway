@@ -1,17 +1,20 @@
 #!/bin/zsh
 set -euo pipefail
 
-root="$(cd "$(dirname "$0")/.." && pwd -P)"
+source_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-test.XXXXXX")"
 trap 'rm -rf "$test_root"' EXIT INT TERM
+# Wrappers refuse uncommitted changes, so run them from a committed snapshot
+# of the working tree rather than through a bypass.
+root="$test_root/gateway"; mkdir -p "$root"
+cp -p "$source_root"/*.sh "$source_root"/*.py "$source_root"/*.json "$source_root"/output-contract.txt "$root"/
+git -C "$root" init -q && git -C "$root" add -A && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m snapshot
 mkdir -p "$test_root/.collab" "$test_root/packet" "$test_root/shared" "$test_root/bin"
 print 'Review prompt.' > "$test_root/prompt.md"
 print 'Safe packet fixture.' > "$test_root/packet/source.md"
 print 'Shared review prompt.' > "$test_root/shared/prompt.md"
 print 'Shared packet fixture.' > "$test_root/shared/packet.md"
 unset GEMINI_API_KEY GOOGLE_API_KEY
-# Development runs use the working copy; wrappers record it as "(dirty)".
-export REVIEWER_ALLOW_DIRTY_WRAPPER=1
 
 cat > "$test_root/bin/claude" <<'EOF'
 #!/bin/zsh
@@ -279,7 +282,7 @@ for line in 'Owner: claude' 'Selected model: gpt-6-sol' 'Reasoning effort: high'
   grep -Fx -- "$line" "$test_root/.collab/codex-hard.md" >/dev/null || { print -u2 "codex-hard.md missing: $line"; exit 1; }
 done
 [[ -s "$test_root/.collab/codex-hard.md.sha256" ]]
-grep -E '^Wrapper revision: [0-9a-f]{40}( \(dirty\))?$' "$test_root/.collab/codex-hard.md" >/dev/null
+grep -E '^Wrapper revision: [0-9a-f]{40}$' "$test_root/.collab/codex-hard.md" >/dev/null
 jq -e '.reviewer_metadata.wrapper_revision | test("^[0-9a-f]{40}")' "$test_root/.collab/gemini-hard.json" >/dev/null
 codex_review routine codex-routine.md env CODEX_TEST_MODE=success >/dev/null
 grep -F -- 'model_reasoning_effort="medium"' "$codex_marker" >/dev/null
@@ -292,6 +295,12 @@ codex_fails 70 hard codex-failure.md env CODEX_TEST_MODE=fail
 codex_fails 70 hard codex-incomplete.md env CODEX_TEST_MODE=incomplete
 codex_fails 70 hard codex-timeout.md env CODEX_TEST_MODE=hang CODEX_MAX_TIME_SECONDS=1
 jq -e '.reason == "Codex invocation timed out" and .owner == "claude"' "$test_root/.collab/codex-timeout.diagnostic.json" >/dev/null
+
+# Uncommitted wrapper changes are refused (no bypass).
+print '# local edit' >> "$root/codex-review.sh"
+set +e; codex_review hard codex-dirty.md env CODEX_TEST_MODE=success >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 78 ]] && jq -e '.reason == "gateway wrapper files have uncommitted changes"' "$test_root/.collab/codex-dirty.diagnostic.json" >/dev/null
+git -C "$root" checkout -q -- codex-review.sh
 
 # An agent never reviews work it owns; owner is recorded on every reviewer.
 owner_rejects() {

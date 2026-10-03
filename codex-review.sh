@@ -20,10 +20,15 @@ stdout="$tmp/events.jsonl"; stderr="$tmp/stderr"; combined="$tmp/prompt.txt"; la
 fail() { local code="$1" reason="$2"; if [[ ! -s "$diagnostic" ]]; then jq -n --arg owner "$owner" --arg requested "$requested_model" --arg selected "${model:-}" --arg reason "$reason" --arg code "$code" --arg elapsed "$((SECONDS-start))" --rawfile stdout "$stdout" --rawfile stderr "$stderr" '{provider:"codex",owner:$owner,requested_model:$requested,selected_model:$selected,reason:$reason,exit_code:($code|tonumber),elapsed_seconds:($elapsed|tonumber),stdout:$stdout,stderr:$stderr}' > "$tmp/diagnostic.json" && chmod 444 "$tmp/diagnostic.json" && mv -f "$tmp/diagnostic.json" "$diagnostic"; fi; print -u2 "$reason; diagnostics captured at $diagnostic"; exit "$code"; }
 safe() { local f="$1" label="$2"; [[ -f "$f" && ! -L "$f" ]] || fail 66 "$label is not a regular file"; f="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"; if [[ -n "$packet_root" ]]; then local pr="$(cd "$packet_root" 2>/dev/null && pwd -P)" || fail 77 "invalid packet root"; case "$f" in "$root"/*|"$pr"/*) ;; *) fail 77 "$label is outside allowed roots";; esac; else case "$f" in "$root"/*) ;; *) fail 77 "$label must be inside repo or use --packet-root";; esac; fi; case "$f" in */.env|*/.env.*|*/.reviewers.env|*/data/*|*/exports/*|*/artifacts/private/*|*.pem|*.key) fail 77 "refusing private $label";; esac; REPLY="$f"; }
 # Provenance (workspace framework v6 §7): record the gateway commit this wrapper
-# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
-# is for the provider-free tests only; it is recorded as "(dirty)".
-wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
-if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
+# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
+# copy outside any repository (consumer-shim fixtures) records "unversioned",
+# which docs-check rejects for reviews captured after adoption.
+wrapper_rev="unversioned"
+if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
+  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
+  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
+  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
+fi
 command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
 # Reviews run on the ChatGPT plan. An API key would switch Codex to billed
 # API usage, so its presence is refused and the login method is checked.
