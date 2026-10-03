@@ -53,6 +53,7 @@ changed by this workstream until the user approves a rollout.
 | r05 (v5) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r05.md` | REJECT |
 | r06 (implementation 4d3f7bc) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r06.md` | REJECT |
 | r07 (implementation daf4bb5 + status lines) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r07.md` | REJECT |
+| r08 (implementation 4f2352f + status lines) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r08.md` | REJECT |
 
 ## Findings and conditions
 
@@ -63,112 +64,122 @@ Compact rows (R05-F15): exact text stays in the indexed raw review.
 | R01-F1 | blocker | verified r07 | closed |
 | R01-F2 | blocker | verified r07 | closed |
 | R01-F3 | blocker | verified r07 | closed |
-| R01-F4 | major | open: re-verify in r08 | open |
-| R01-F5 | major | open: re-verify in r08 | open |
-| R01-F6 | major | open: re-verify in r08 | open |
+| R01-F4 | major | verified r08 | closed |
+| R01-F5 | major | open: see r08 | open |
+| R01-F6 | major | open: see r08 | open |
 | R01-F7 | major | verified r07 | closed |
-| R01-F8 | major | open: re-verify in r08 | open |
+| R01-F8 | major | open: see r08 | open |
 | R01-F9 | major | verified r07 | closed |
 | R01-F10 | minor | verified r07 | closed |
-| R01-F11 | minor | open: re-verify in r08 | open |
+| R01-F11 | minor | open: see r08 | open |
 | R02-F1 | blocker | verified r07 | closed |
 | R02-F2 | blocker | verified r07 | closed |
 | R02-F3 | major | verified r07 | closed |
-| R02-F4 | major | open: re-verify in r08 | open |
-| R02-F5 | major | open: re-verify in r08 | open |
-| R02-F6 | blocker | open: re-verify in r08 | open |
+| R02-F4 | major | open: see r08 | open |
+| R02-F5 | major | open: see r08 | open |
+| R02-F6 | blocker | open: see r08 | open |
 | R02-F7 | major | verified r07 | closed |
-| R02-F8 | major | open: re-verify in r08 | open |
+| R02-F8 | major | open: see r08 | open |
 | R02-F9 | minor | verified r07 | closed |
 | R02-F10 | minor | verified r07 | closed |
-| R02-F11 | major | open: re-verify in r08 | open |
+| R02-F11 | major | open: see r08 | open |
 | R02-F12 | major | verified r07 | closed |
 | R02-F13 | major | verified r07 | closed |
-| R02-F14 | major | open: re-verify in r08 | open |
+| R02-F14 | major | open: see r08 | open |
 | R02-F15 | blocker | verified r07 | closed |
 | R02-F16 | major | verified r07 | closed |
 | R02-F17 | major | verified r07 | closed |
 | R02-F18 | minor | verified r07 | closed |
-| R02-C1 | condition | open: re-verify in r08 | open |
-| R02-C2 | condition | open: re-verify in r08 | open |
-| R02-C3 | condition | open: re-verify in r08 | open |
+| R02-C1 | condition | open: see r08 | open |
+| R02-C2 | condition | open: see r08 | open |
+| R02-C3 | condition | open: see r08 | open |
 | R02-C4 | condition | verified r07 | closed |
-| R02-C5 | condition | open: re-verify in r08 | open |
+| R02-C5 | condition | open: see r08 | open |
 | R02-C6 | condition | verified r07 | closed |
 | R03-F1 | major | verified r07 | closed |
 | R03-F2 | major | verified r07 | closed |
-| R03-F3 | blocker | open: re-verify in r08 | open |
-| R03-F4 | major | open: re-verify in r08 | open |
-| R03-F5 | blocker | open: re-verify in r08 | open |
+| R03-F3 | blocker | open: see r08 | open |
+| R03-F4 | major | open: see r08 | open |
+| R03-F5 | blocker | open: see r08 | open |
 | R03-F6 | major | verified r07 | closed |
 | R03-F7 | major | verified r07 | closed |
 | R03-F8 | major | verified r07 | closed |
-| R03-F9 | major | open: re-verify in r08 | open |
-| R03-F10 | major | open: re-verify in r08 | open |
+| R03-F9 | major | open: see r08 | open |
+| R03-F10 | major | open: see r08 | open |
 | R03-F11 | major | verified r07 | closed |
-| R03-C1 | condition | open: re-verify in r08 | open |
-| R03-C2 | condition | open: re-verify in r08 | open |
-| R03-C3 | condition | open: re-verify in r08 | open |
+| R03-C1 | condition | open: see r08 | open |
+| R03-C2 | condition | open: see r08 | open |
+| R03-C3 | condition | open: see r08 | open |
 | R03-C4 | condition | verified r07 | closed |
-| R03-C5 | condition | open: re-verify in r08 | open |
+| R03-C5 | condition | open: see r08 | open |
 | R03-C6 | condition | verified r07 | closed |
 | R04-F1 | minor | verified r07 | closed |
 | R04-F2 | minor | verified r07 | closed |
-| R04-F3 | blocker | open: re-verify in r08 | open |
+| R04-F3 | blocker | open: see r08 | open |
 | R04-F4 | minor | verified r07 | closed |
-| R04-F5 | major | open: re-verify in r08 | open |
+| R04-F5 | major | open: see r08 | open |
 | R04-F6 | minor | verified r07 | closed |
 | R04-F7 | major | verified r07 | closed |
 | R04-F8 | minor | verified r07 | closed |
-| R04-F9 | major | open: re-verify in r08 | open |
-| R04-F10 | major | open: re-verify in r08 | open |
+| R04-F9 | major | open: see r08 | open |
+| R04-F10 | major | open: see r08 | open |
 | R04-F11 | major | verified r07 | closed |
 | R04-F12 | minor | verified r07 | closed |
-| R04-C1 | condition | open: re-verify in r08 | open |
-| R04-C2 | condition | open: re-verify in r08 | open |
-| R04-C3 | condition | open: re-verify in r08 | open |
+| R04-C1 | condition | open: see r08 | open |
+| R04-C2 | condition | open: see r08 | open |
+| R04-C3 | condition | open: see r08 | open |
 | R04-C4 | condition | verified r07 | closed |
-| R04-C5 | condition | open: re-verify in r08 | open |
+| R04-C5 | condition | open: see r08 | open |
 | R04-C6 | condition | verified r07 | closed |
 | R05-F1 | minor | verified r07 | closed |
 | R05-F2 | minor | verified r07 | closed |
-| R05-F3 | blocker | open: re-verify in r08 | open |
+| R05-F3 | blocker | verified r08 | closed |
 | R05-F4 | major | verified r07 | closed |
-| R05-F5 | major | open: re-verify in r08 | open |
+| R05-F5 | major | open: see r08 | open |
 | R05-F6 | minor | verified r07 | closed |
 | R05-F7 | minor | verified r07 | closed |
 | R05-F8 | minor | verified r07 | closed |
-| R05-F9 | minor | open: re-verify in r08 | open |
-| R05-F10 | minor | open: re-verify in r08 | open |
+| R05-F9 | minor | open: see r08 | open |
+| R05-F10 | minor | open: see r08 | open |
 | R05-F11 | blocker | verified r07 | closed |
 | R05-F12 | minor | verified r07 | closed |
-| R05-F13 | major | open: re-verify in r08 | open |
+| R05-F13 | major | open: see r08 | open |
 | R05-F14 | major | verified r07 | closed |
 | R05-F15 | major | verified r07 | closed |
-| R05-C1 | condition | open: re-verify in r08 | open |
-| R05-C2 | condition | open: re-verify in r08 | open |
-| R05-C3 | condition | open: re-verify in r08 | open |
+| R05-C1 | condition | open: see r08 | open |
+| R05-C2 | condition | verified r08 | closed |
+| R05-C3 | condition | open: see r08 | open |
 | R05-C4 | condition | verified r07 | closed |
-| R05-C5 | condition | open: re-verify in r08 | open |
+| R05-C5 | condition | open: see r08 | open |
 | R05-C6 | condition | verified r07 | closed |
 | R06-F1 | blocker | verified r07 | closed |
-| R06-F2 | blocker | open: re-verify in r08 | open |
-| R06-F3 | blocker | open: re-verify in r08 | open |
-| R06-F4 | major | open: re-verify in r08 | open |
-| R06-F5 | major | open: re-verify in r08 | open |
-| R06-F6 | major | open: re-verify in r08 | open |
-| R06-F7 | major | open: re-verify in r08 | open |
-| R06-F8 | minor | open: re-verify in r08 | open |
-| R07-F1 | blocker | open: re-verify in r08 | open |
-| R07-F2 | blocker | open: re-verify in r08 | open |
-| R07-F3 | blocker | open: re-verify in r08 | open |
-| R07-F4 | major | open: re-verify in r08 | open |
-| R07-F5 | major | open: re-verify in r08 | open |
-| R07-F6 | major | open: re-verify in r08 | open |
-| R07-F7 | major | open: re-verify in r08 | open |
-| R07-C1 | condition | open: re-verify in r08 | open |
-| R07-C2 | condition | open: re-verify in r08 | open |
-| R07-C3 | condition | open: re-verify in r08 | open |
+| R06-F2 | blocker | open: see r08 | open |
+| R06-F3 | blocker | verified r08 | closed |
+| R06-F4 | major | open: see r08 | open |
+| R06-F5 | major | open: see r08 | open |
+| R06-F6 | major | verified r08 | closed |
+| R06-F7 | major | open: see r08 | open |
+| R06-F8 | minor | open: see r08 | open |
+| R07-F1 | blocker | verified r08 | closed |
+| R07-F2 | blocker | open: see r08 | open |
+| R07-F3 | blocker | verified r08 | closed |
+| R07-F4 | major | open: see r08 | open |
+| R07-F5 | major | open: see r08 | open |
+| R07-F6 | major | open: see r08 | open |
+| R07-F7 | major | verified r08 | closed |
+| R07-C1 | condition | open: see r08 | open |
+| R07-C2 | condition | open: see r08 | open |
+| R07-C3 | condition | open: see r08 | open |
+| R08-C1 | condition | open: see r08 | open |
+| R08-C2 | condition | open: see r08 | open |
+| R08-C3 | condition | open: see r08 | open |
+| R08-C4 | condition | open: see r08 | open |
+| R08-F1 | blocker | open: see r08 | open |
+| R08-F2 | major | open: see r08 | open |
+| R08-F3 | major | open: see r08 | open |
+| R08-F4 | major | open: see r08 | open |
+| R08-F5 | major | open: see r08 | open |
+| R08-F6 | minor | open: see r08 | open |
 
 ## Log
 
@@ -209,3 +220,6 @@ Compact rows (R05-F15): exact text stays in the indexed raw review.
   checked against git status, observations need a command and result and may
   not be future-dated, and n/a requires `Operational: no`. Residual by
   design: authenticity of transcribed user quotes is policy, not machine-checked.
+- 2026-10-03: r08 Codex REJECT: 8 more items resolved (59 of 109 closed); 50 open
+  plus 10 new r08 items; no item tagged inherent. Owner assessment: the loop
+  has reached its asymptote; escalated to the user for a policy decision.
