@@ -324,7 +324,10 @@ def record(repo):
                 if in_git and git(repo, "ls-files", "--error-unmatch", frel)[0] != 0:
                     errors.append(f"{name}: {frel} is not tracked; review evidence must be committed")
                 elif in_git:
-                    if git(repo, "diff", "--quiet", "HEAD", "--", frel)[0] != 0:
+                    # A newly staged artifact is not yet in HEAD; that is an addition
+                    # about to be committed, not an edit (found in the pilot).
+                    in_head = git(repo, "cat-file", "-e", f"HEAD:{frel}")[0] == 0
+                    if in_head and git(repo, "diff", "--quiet", "HEAD", "--", frel)[0] != 0:
                         errors.append(f"{name}: {frel} has uncommitted changes (artifacts are never edited)")
                     if git(repo, "log", "--format=%H", "--diff-filter=MDR", "--", frel)[1]:
                         errors.append(f"{name}: {frel} was modified, deleted, or renamed after its first commit")

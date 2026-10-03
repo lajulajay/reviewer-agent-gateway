@@ -225,6 +225,18 @@ class DocsCheckTest(unittest.TestCase):
         code, out = self.record()
         self.assertEqual(code, 0, out)
 
+    def test_newly_staged_artifact_passes_before_commit(self):
+        self.f.workstream(GOOD_ROWS)
+        self.f.adopt()
+        self.f.artifact("codex-x-r03.md", CLEAN_ACCEPT)
+        ws = self.f.repo / "workstreams" / "x.md"
+        ws.write_text(ws.read_text().replace("| r02 | Codex | hard | `.collab/codex-x-r02.md` | REJECT |\n",
+                      "| r02 | Codex | hard | `.collab/codex-x-r02.md` | REJECT |\n| r03 | Codex | hard | `.collab/codex-x-r03.md` | ACCEPT |\n"))
+        self.assertIn("codex-x-r03.md is not tracked", self.record()[1])
+        git(self.f.repo, "add", "-A")
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+
     def test_adopted_repo_needs_baseline(self):
         self.f.workstream(GOOD_ROWS)
         (self.f.repo / "docs-baseline.json").unlink()
