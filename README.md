@@ -87,47 +87,59 @@ Disable usage credits in the Claude account if additional charges must be
 impossible. An approved list is an account policy, not a live entitlement
 check.
 
-The Gemini wrapper authenticates with an API key. Google-account sign-in was
-the intended path, but on 2026-10-02 Google rejected Gemini CLI OAuth logins
-("This client is no longer supported for Gemini Code Assist for individuals"),
-so the wrapper reverted to the key. It reads `GEMINI_API_KEY` from the
-environment, else from `REVIEWER_CREDENTIALS_FILE`, `.reviewers.env`, `.env`,
-or `agent/.env` under the target repository; a credentials file must be mode
-600. **API-key calls are billed with no CLI-side overage guard**: spend is
-bounded only by the budget cap on the key's Google Cloud project. The
-`included_no_credits` policy field is retained for selector compatibility and
-does not mean free here.
+## Gemini reviews through Antigravity CLI
 
-The `gemini-model-policy.json` catalog records approved model IDs and release
-dates. The `pro`/`hard` review tier selects `gemini-3.8-flash`;
-`flash`/`routine` selects the second older approved release,
-`gemini-3.6-flash`. The tier names are retained for consumer compatibility;
-they do not imply the selected model's family. Concrete model IDs are accepted
-only when approved by the catalog. The wrapper requires the CLI response to
-report exactly the selected ID. A model appearing in the API `models.list`
-does not prove the key has quota for it.
+The Gemini wrapper runs reviews through the Antigravity CLI (`agy`) on the
+signed-in Google account's plan quota. Gemini CLI personal-account OAuth was
+retired on 2026-10-02 and the API-key path that replaced it was billed per
+call, so the wrapper now refuses to start if `GEMINI_API_KEY` or
+`GOOGLE_API_KEY` is set (either would move `agy` onto billed API calls). Sign
+in once by running `agy` interactively; the wrapper fails closed when signed
+out.
 
-Each invocation points the CLI at the system settings file
-`/etc/reviewer-gateway/gemini-settings.json`, which enforces `gemini-api-key`
-authentication so the CLI cannot drift to another credential or billing path.
-Gemini CLI silently skips a system settings file unless the file and its
-parent directory are root-owned (a per-invocation temp file was ignored this
-way on 2026-10-02), so provision it once:
+Before each review the wrapper reads `agy -p /usage` and stops if the shared
+weekly "Gemini Models" quota (Flash and Pro draw from one bucket, charged by
+token cost) is below `GEMINI_REVIEW_MIN_QUOTA` (default `0.15`). This keeps
+headroom for interactive use and keeps reviews from reaching the point where
+`agy` starts spending AI credits. Each call carries a ~15k-token built-in
+system prompt, so even small reviews consume measurable quota.
 
-```bash
-sudo mkdir -p /etc/reviewer-gateway
-echo '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}}}' \
-  | sudo tee /etc/reviewer-gateway/gemini-settings.json >/dev/null
-```
+The `gemini-model-policy.json` catalog lists approved `agy` model IDs, which
+carry an effort suffix, with release dates. The `pro`/`hard` tier selects
+`gemini-3.8-flash-high`; `flash`/`routine` selects the second older approved
+release, `gemini-3.6-flash-high`. The tier names are kept for consumer
+compatibility and do not imply the model family. `explicit_only_models`
+(currently `gemini-3.1-pro-high`, which is older than every listed Flash
+release) are accepted only when named by full ID. Run `agy models` to see what
+the account offers and review the catalog when Google ships a model.
 
-The wrapper fails closed before staging the packet if the key or that file is
-missing, the file is not root-owned, is group/other writable, or does not
-enforce API-key auth, and after the call if the CLI reports skipping it.
-`GEMINI_REVIEW_SYSTEM_SETTINGS` overrides the path for isolated tests only; it
-skips the ownership check, and a real CLI would then skip the file and trip the
-post-call check. `GEMINI_MAX_TIME_SECONDS` bounds the CLI call (default 600
-seconds). Google and Vertex credential variables are removed before launch.
-The approved catalog must be reviewed when Google releases a new model.
+Isolation. `agy` is a full agent with shell, file, web, browser, scheduling,
+and subagent tools, and plan mode does not remove them. The wrapper runs it
+from a private empty workspace whose `.agents/hooks.json` holds a `PreToolUse`
+hook matching every tool that returns `deny`. Verified against `agy` 1.2.15 on
+2026-10-02: the hook blocks reads, writes, and commands, overrides user-level
+permission allows, and blocks tools if the hook script itself fails. The
+prompt and packet are therefore inlined into the prompt argument (`agy -p`
+ignores stdin), capped at `GEMINI_MAX_PROMPT_BYTES` (default 800000). Denied
+tool attempts are recorded in `reviewer_metadata.denied_tool_calls`. Slash
+commands and skill expansion are disabled, the call runs with `--mode plan
+--sandbox`, and Google credential variables are removed before launch.
+
+`agy` reports the session model only in its `stream-json` init event; the
+wrapper requires it to equal the selected ID. That is the configured session
+model, not proof of which backend served the request. Self-updates are
+disabled for the call (`AGY_CLI_DISABLE_AUTO_UPDATE=1`) and the CLI version is
+recorded. `GEMINI_MAX_TIME_SECONDS` (default 600) is passed as
+`--print-timeout`, with a `GEMINI_TIMEOUT_GRACE_SECONDS` (default 30) alarm as
+a backstop. Artifacts keep the top-level `response` field and add
+`reviewer_metadata` with the CLI version, requested/selected/resolved model,
+`conversation_id`, starting quota, and denied tool calls.
+
+`agy` saves every run, including the inlined packet, under
+`~/.gemini/antigravity-cli/conversations/<conversation_id>.db`. Neither
+`ANTIGRAVITY_APP_DATA_DIR` nor a separate `HOME` avoids this (the latter loses
+the sign-in), so the copy is left in place and traceable by the recorded ID.
+Packets must still exclude secrets; the private-path rules above apply.
 
 Run provider-free regression checks with:
 

@@ -9,11 +9,7 @@ print 'Review prompt.' > "$test_root/prompt.md"
 print 'Safe packet fixture.' > "$test_root/packet/source.md"
 print 'Shared review prompt.' > "$test_root/shared/prompt.md"
 print 'Shared packet fixture.' > "$test_root/shared/packet.md"
-# A real run requires a root-owned file; the explicit override path is exercised
-# here, and the wrapper still validates its contents.
-print '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}}}' > "$test_root/gemini-settings.json"
-print '{"security":{"auth":{"selectedType":"oauth-personal"}}}' > "$test_root/gemini-settings-weak.json"
-export GEMINI_REVIEW_SYSTEM_SETTINGS="$test_root/gemini-settings.json" GEMINI_API_KEY=test
+unset GEMINI_API_KEY GOOGLE_API_KEY
 
 cat > "$test_root/bin/claude" <<'EOF'
 #!/bin/zsh
@@ -59,28 +55,38 @@ fi
 print -u2 'simulated Ollama failure'
 exit 42
 EOF
-cat > "$test_root/bin/gemini" <<'EOF'
+cat > "$test_root/bin/agy" <<'EOF'
 #!/bin/zsh
-[[ -z "${GEMINI_MOCK_MARKER:-}" ]] || print -r -- "$*" > "$GEMINI_MOCK_MARKER"
-[[ "${GEMINI_TEST_MODE:-}" != hang ]] || sleep 30
-[[ "${GEMINI_TEST_MODE:-}" != skipped-settings ]] || print -u2 "Security Warning: Skipping system settings file '$GEMINI_CLI_SYSTEM_SETTINGS_PATH': Parent directory is insecure"
-if [[ "${GEMINI_TEST_MODE:-}" == success || "${GEMINI_TEST_MODE:-}" == skipped-settings ]]; then
-  [[ "${GEMINI_API_KEY:-}" == test && -z "${GOOGLE_API_KEY:-}" ]] || exit 77
-  jq -e '.security.auth.selectedType == "gemini-api-key" and .security.auth.enforcedType == "gemini-api-key"' "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" >/dev/null || exit 77
-  model=""
-  while [[ $# -gt 0 ]]; do
-    if [[ "$1" == --model ]]; then model="$2"; break; fi
-    shift
-  done
+[[ "$1" != --version ]] || { print 1.2.15; exit 0; }
+if [[ "$1" == -p && "$2" == /usage ]]; then
+  [[ -z "${AGY_MOCK_SIGNED_OUT:-}" ]] || exit 1
+  jq -n --argjson q "${AGY_MOCK_QUOTA:-0.9}" '{status:"SUCCESS",command:{name:"usage",data:{groups:[{name:"Gemini Models",buckets:[{id:"gemini-weekly",remaining_fraction:$q}]}]}}}'
+  exit 0
+fi
+[[ -z "${AGY_MOCK_MARKER:-}" ]] || print -r -- "$*" > "$AGY_MOCK_MARKER"
+# Every review call must be isolated: plan quota, pinned version, deny-all hook.
+[[ -z "${GEMINI_API_KEY:-}" && "${AGY_CLI_DISABLE_AUTO_UPDATE:-}" == 1 && -x .agents/deny-tools.sh ]] || exit 77
+jq -e '."reviewer-isolation".PreToolUse[0].matcher == "*"' .agents/hooks.json >/dev/null || exit 77
+[[ " $* " == *" --sandbox "* && " $* " == *" --mode plan "* && " $* " == *" --disable-slash-commands "* ]] || exit 77
+model=""; args=("$@")
+for i in {1..$#args}; do [[ "${args[$i]}" != --model ]] || model="${args[$((i+1))]}"; done
+[[ "${AGY_TEST_MODE:-}" != hang ]] || sleep 30
+jq -nc --arg model "${AGY_MOCK_RESOLVED:-$model}" '{event:"init",conversation_id:"conv-test",init:{model:$model}}'
+if [[ "${AGY_TEST_MODE:-}" == error ]]; then print -u2 'AGY_ERROR: simulated model failure'; exit 3; fi
+if [[ "${AGY_TEST_MODE:-}" == tool ]]; then
+  decision="$(cd .agents && print '{"toolCall":{"name":"run_command","args":{"CommandLine":"ls"}}}' | ./deny-tools.sh)"
+  [[ "$(jq -r .decision <<< "$decision")" == deny ]] || exit 77
+fi
+if [[ "${AGY_TEST_MODE:-}" == success || "${AGY_TEST_MODE:-}" == tool ]]; then
   body=""
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
   body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nVERDICT: ACCEPT'
-  jq -n --arg response "$body" --arg model "${GEMINI_MOCK_RESOLVED:-$model}" '{response:$response, stats:{models:{($model):{}}}}'
+  jq -nc --arg response "$body" '{event:"result",result:{conversation_id:"conv-test",status:"SUCCESS",response:$response,usage:{total_tokens:1}}}'
   exit 0
 fi
 exit 42
 EOF
-chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/gemini"
+chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/agy"
 cat > "$test_root/claude-policy.json" <<'EOF'
 {"hard_model":"claude-opus-5-5","routine_two_releases_down_scope":"all_models","models_newest_first":[
   {"id":"claude-sonnet-5-5","released_on":"2026-09-28","included_no_credits":true},
@@ -121,7 +127,7 @@ done
 run_failure() {
   local wrapper="$1" model="$2" output="$3"; shift 3
   set +e
-  PATH="$test_root/bin:$PATH" GEMINI_API_KEY=test CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" \
+  PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" \
     "$root/$wrapper" "$model" "$test_root/prompt.md" "$test_root/.collab/$output" "$test_root/packet/source.md" >/dev/null 2>&1
   local code=$?
   set -e
@@ -169,69 +175,55 @@ set -e
 [[ $code -eq 78 && -s "$test_root/.collab/claude-api-auth.diagnostic.json" ]]
 [[ ! -e "$test_root/.collab/claude-api-auth.md" ]]
 
-# Gemini policy pins both tiers and rejects a resolved-model mismatch.
-gemini_marker="$test_root/gemini-marker"
-: > "$gemini_marker"
-PATH="$test_root/bin:$PATH" GEMINI_API_KEY=test GEMINI_TEST_MODE=success \
-  GEMINI_MOCK_MARKER="$gemini_marker" "$root/gemini-review.sh" pro \
-  "$test_root/prompt.md" "$test_root/.collab/gemini-hard.json" \
-  "$test_root/packet/source.md" >/dev/null
-grep -F -- '--model gemini-3.8-flash' "$gemini_marker" >/dev/null
-jq -e '.reviewer_metadata.requested_model == "pro" and .reviewer_metadata.preflight_selected_model == "gemini-3.8-flash"' \
+# Gemini (agy) policy pins both tiers, inlines the packet, and records metadata.
+agy_marker="$test_root/agy-marker"
+gemini() {
+  local output="$1"; shift
+  PATH="$test_root/bin:$PATH" AGY_MOCK_MARKER="$agy_marker" "$@" "$root/gemini-review.sh" \
+    "${GEMINI_MODEL:-pro}" "$test_root/prompt.md" "$test_root/.collab/$output" "$test_root/packet/source.md"
+}
+gemini_fails() {
+  local expected="$1" output="$2"; shift 2
+  set +e; gemini "$output" "$@" >/dev/null 2>&1; local code=$?; set -e
+  [[ $code -eq $expected && -s "$test_root/.collab/${output%.json}.diagnostic.json" && ! -e "$test_root/.collab/$output" ]] \
+    || { print -u2 "gemini $output: expected exit $expected, got $code"; exit 1; }
+}
+: > "$agy_marker"
+gemini gemini-hard.json env AGY_TEST_MODE=success >/dev/null
+grep -F -- '--model gemini-3.8-flash-high' "$agy_marker" >/dev/null
+grep -F -- 'Safe packet fixture.' "$agy_marker" >/dev/null
+jq -e '.reviewer_metadata | .cli == "agy" and .cli_version == "1.2.15" and .requested_model == "pro"
+  and .preflight_selected_model == "gemini-3.8-flash-high" and .resolved_models == ["gemini-3.8-flash-high"]
+  and .conversation_id == "conv-test" and .quota_remaining_before == 0.9 and .denied_tool_calls == []' \
   "$test_root/.collab/gemini-hard.json" >/dev/null
+jq -e '.response | endswith("VERDICT: ACCEPT")' "$test_root/.collab/gemini-hard.json" >/dev/null
 [[ -s "$test_root/.collab/gemini-hard.json.sha256" ]]
 
-PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success \
-  GEMINI_MOCK_MARKER="$gemini_marker" "$root/gemini-review.sh" flash \
-  "$test_root/prompt.md" "$test_root/.collab/gemini-routine.json" \
-  "$test_root/packet/source.md" >/dev/null
-grep -F -- '--model gemini-3.6-flash' "$gemini_marker" >/dev/null
+GEMINI_MODEL=flash gemini gemini-routine.json env AGY_TEST_MODE=success >/dev/null
+grep -F -- '--model gemini-3.6-flash-high' "$agy_marker" >/dev/null
+GEMINI_MODEL=gemini-3.1-pro-high gemini gemini-explicit-pro.json env AGY_TEST_MODE=success >/dev/null
+grep -F -- '--model gemini-3.1-pro-high' "$agy_marker" >/dev/null
 
-set +e
-PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success GEMINI_MOCK_RESOLVED=gemini-3.7-flash \
-  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
-  "$test_root/.collab/gemini-mismatch.json" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 74 && -s "$test_root/.collab/gemini-mismatch.diagnostic.json" ]]
-[[ ! -e "$test_root/.collab/gemini-mismatch.json" ]]
+# Denied tool attempts go through the real hook script and are recorded.
+gemini gemini-tool.json env AGY_TEST_MODE=tool >/dev/null
+jq -e '.reviewer_metadata.denied_tool_calls == ["run_command"]' "$test_root/.collab/gemini-tool.json" >/dev/null
 
-# A CLI that skipped the enforced settings ran without the login/no-overage
-# guarantees; its otherwise valid review must not be captured.
-set +e
-PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=skipped-settings \
-  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
-  "$test_root/.collab/gemini-skipped.json" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 78 && -s "$test_root/.collab/gemini-skipped.diagnostic.json" ]]
-[[ ! -e "$test_root/.collab/gemini-skipped.json" ]]
+gemini_fails 74 gemini-mismatch.json env AGY_TEST_MODE=success AGY_MOCK_RESOLVED=gemini-3.7-flash-high
+GEMINI_MODEL=gemini-3.8-flash-low gemini_fails 78 gemini-unapproved.json env AGY_TEST_MODE=success
+gemini_fails 78 gemini-apikey.json env AGY_TEST_MODE=success GEMINI_API_KEY=test
+gemini_fails 70 gemini-error.json env AGY_TEST_MODE=error
+jq -e '.reason | contains("AGY_ERROR: simulated model failure")' "$test_root/.collab/gemini-error.diagnostic.json" >/dev/null
+gemini_fails 78 gemini-signed-out.json env AGY_TEST_MODE=success AGY_MOCK_SIGNED_OUT=1
+gemini_fails 64 gemini-bad-timeout.json env AGY_TEST_MODE=success GEMINI_MAX_TIME_SECONDS=abc
+gemini_fails 65 gemini-oversize.json env AGY_TEST_MODE=success GEMINI_MAX_PROMPT_BYTES=10
 
-set +e
-PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success GEMINI_REVIEW_SYSTEM_SETTINGS="$test_root/gemini-settings-weak.json" \
-  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
-  "$test_root/.collab/gemini-weak.json" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 78 && -s "$test_root/.collab/gemini-weak.diagnostic.json" ]]
+# Low quota stops before the review call is made.
+: > "$agy_marker"
+gemini_fails 78 gemini-low-quota.json env AGY_TEST_MODE=success AGY_MOCK_QUOTA=0.1
+[[ ! -s "$agy_marker" ]] || { print -u2 "agy review ran despite low quota"; exit 1; }
 
-set +e
-PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=hang GEMINI_MAX_TIME_SECONDS=1 \
-  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
-  "$test_root/.collab/gemini-timeout.json" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 70 ]]
+gemini_fails 70 gemini-timeout.json env AGY_TEST_MODE=hang GEMINI_MAX_TIME_SECONDS=1 GEMINI_TIMEOUT_GRACE_SECONDS=1
 jq -e '.reason == "Gemini invocation timed out"' "$test_root/.collab/gemini-timeout.diagnostic.json" >/dev/null
-
-# No key in the environment or any credentials file fails before staging.
-set +e
-env -u GEMINI_API_KEY PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success \
-  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
-  "$test_root/.collab/gemini-nokey.json" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 78 && -s "$test_root/.collab/gemini-nokey.diagnostic.json" ]]
 
 set +e
 PATH="$test_root/bin:$PATH" \

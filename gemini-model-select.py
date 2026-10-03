@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a pinned Gemini reviewer model from a subscription-use policy."""
+"""Select a pinned Antigravity (agy) Gemini reviewer model from a plan-quota policy."""
 
 import json
 import re
@@ -7,6 +7,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+# agy model IDs carry a reasoning-effort suffix, e.g. gemini-3.8-flash-high.
+MODEL_ID = re.compile(r"gemini-[0-9]+(?:\.[0-9]+)?-(?:pro|flash)-(?:low|medium|high)")
 
 def select(policy_path: Path, requested: str) -> str:
     policy = json.loads(policy_path.read_text())
@@ -21,9 +23,7 @@ def select(policy_path: Path, requested: str) -> str:
     dates = []
     for row in models:
         model_id = row["id"]
-        if not isinstance(model_id, str) or not re.fullmatch(
-            r"gemini-[0-9]+(?:\.[0-9]+)?-(?:pro|flash)(?:-preview)?", model_id
-        ):
+        if not isinstance(model_id, str) or not MODEL_ID.fullmatch(model_id):
             raise ValueError(f"invalid review model ID: {model_id!r}")
         if model_id in ids:
             raise ValueError(f"duplicate model ID: {model_id}")
@@ -36,6 +36,15 @@ def select(policy_path: Path, requested: str) -> str:
         ids.append(model_id)
         if row["included_no_credits"]:
             approved.append(model_id)
+    explicit_only = policy.get("explicit_only_models", [])
+    if not isinstance(explicit_only, list):
+        raise ValueError("explicit_only_models must be a list")
+    for model_id in explicit_only:
+        if not isinstance(model_id, str) or not MODEL_ID.fullmatch(model_id):
+            raise ValueError(f"invalid review model ID: {model_id!r}")
+        if model_id in ids:
+            raise ValueError(f"duplicate model ID: {model_id}")
+        ids.append(model_id)
     if not approved:
         raise ValueError("no models approved for included usage")
     hard = policy["hard_model"]
@@ -50,7 +59,9 @@ def select(policy_path: Path, requested: str) -> str:
         if len(candidates) < 2:
             raise ValueError("fewer than two older approved releases in routine selection scope")
         return candidates[1]
-    if requested in approved:
+    # Explicit-only models have no release date in the catalog, so tiers never
+    # select them; a caller must name one by its full ID.
+    if requested in approved or requested in explicit_only:
         return requested
     raise ValueError(f"requested model is not approved for included usage: {requested}")
 
