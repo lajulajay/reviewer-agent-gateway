@@ -28,8 +28,11 @@ changed by this workstream until the user approves a rollout.
     full text). Supersedes v3's "never edited" rule for legacy `COLLAB.md`.
   - D5: `trading-strategies` git initialization is a separate audited
     decision.
-  - "we should commit": owner reading — commit this workstream's gateway
-    records now (not pushed).
+  - "we should commit": owner reading was "commit this workstream's gateway
+    records" (done, `b0f2b0a`). **Superseded by user clarification
+    2026-10-03:** "i meant put trading strategies under git b/c i thought
+    that was the question". D5 therefore resolves to: put `trading-strategies`
+    under git now, as its own audited step outside this framework's rollout.
 - 2026-10-03, user, scope: framework design. "sprawl is a big part of the
   problem"; STATUS.md treated as RAM with character limits; occasional
   cleanup.
@@ -40,6 +43,7 @@ changed by this workstream until the user approves a rollout.
 | :--- | :--- | :--- | :--- | :--- |
 | r01 (v1) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r01.md` | REJECT |
 | r02 (v2) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r02.md` | REJECT |
+| r03 (v3) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r03.md` | REJECT |
 
 ## Findings and conditions
 
@@ -74,6 +78,17 @@ changed by this workstream until the user approves a rollout.
 | R02-F16 | major | Owner assignment can race or stay uncommitted | Accepted as policy (see R02-F2) | resolved in v3 |
 | R02-F17 | major | Reviewer may apply newer standards than branch pin | Partially accepted: standards revision recorded with each review; no digest enforcement | resolved in v3 |
 | R02-F18 | minor | Deferral triggers not observable | Accepted: triggers replaced by measurable caps and the periodic compaction pass | resolved in v3 |
+| R03-F1 | major | Unlabeled items untraceable if owner and reviewer both miss them | Accepted: at closure the owner records a raw-vs-rows comparison line per round; guarantee stated as labeled items only | resolved in v4 |
+| R03-F2 | major | Two sessions of the same owner can both start | Accepted: pilot policy — one session per workstream, user stops older sessions before reassignment; no general serialization claim | resolved in v4 |
+| R03-F3 | blocker | fixed <commit> and user-decided quotes do not prove an effective, specific resolution | Accepted: blocker/condition closure cites the later review round that verified it, or a user decision naming the finding ID | resolved in v4 |
+| R03-F4 | major | done allows open majors | Accepted: done needs a final disposition on every labeled item; open items allowed only at transfer | resolved in v4 |
+| R03-F5 | blocker | First done check impossible: legacy reviews, prompts/packets swept in | Accepted: check scoped to review artifacts; round key = artifact path; legacy rounds indexed and reconciled manually | resolved in v4 |
+| R03-F6 | major | Sidecar adds a file per review (sprawl) and cannot prove first output | Accepted: sidecar dropped; labeled items parsed from the committed raw artifact | resolved in v4 |
+| R03-F7 | major | Downward eviction can demote rules or strand obligations; uncapped tiers unstated | Accepted: budgets reduced by shortening and dedup in the authoritative home; capped vs reported tiers stated explicitly | resolved in v4 |
+| R03-F8 | major | STATUS.md can show a false current view across branches | Accepted: STATUS.md is a branch-scoped snapshot with revision and time; workstream records are authoritative | resolved in v4 |
+| R03-F9 | major | Memory cleanup scheduled after pilot while checks fail on breach | Accepted: baseline before pilot; existing overages are ratcheted targets (must not grow), conflicting loaded memory cleared before pilot | resolved in v4 |
+| R03-F10 | major | Listed local files can be stranded; same-day runtime check can be stale | Accepted: pending content committed; runtime observation taken immediately before an operational handoff | resolved in v4 |
+| R03-F11 | major | Standards mismatch only reported | Accepted: mismatch fails record; wrapper records the gateway revision it ran from | resolved in v4 |
 
 ## Log
 
@@ -87,3 +102,6 @@ changed by this workstream until the user approves a rollout.
   part of the problem"; treat STATUS.md as RAM with character limits; add
   occasional cleanup. Owner reading: prefer policy and narrower claims over new
   machinery that adds files. v3 written as successor.
+- 2026-10-03: r03 Codex REJECT (2 blockers, 9 majors; converging). All
+  findings accepted; F6 drops the sidecar in line with the sprawl constraint.
+  v4 written as successor.
