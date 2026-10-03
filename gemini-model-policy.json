@@ -1,0 +1,9 @@
+{
+  "hard_model": "gemini-3.8-flash",
+  "routine_two_releases_down_scope": "all_models",
+  "models_newest_first": [
+    {"id": "gemini-3.8-flash", "released_on": "2026-09-02", "included_no_credits": true},
+    {"id": "gemini-3.7-flash", "released_on": "2026-08-13", "included_no_credits": true},
+    {"id": "gemini-3.6-flash", "released_on": "2026-07-21", "included_no_credits": true}
+  ]
+}

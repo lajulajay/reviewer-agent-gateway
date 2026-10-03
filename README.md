@@ -36,16 +36,6 @@ second reviewer when Claude is unavailable or a decision-material disagreement
 remains unresolved. Kimi is inactive while Moonshot membership access is
 pending; it may be reconsidered only after explicit reactivation.
 
-Before a Gemini review, the gateway uses the configured API key to paginate
-`models.list` and requires the requested model to support `generateContent`.
-This is fail-closed and happens before the CLI request. Callers may pass a
-concrete available model, or the stable `pro` / `flash` capability profiles.
-The profiles choose the first account-available candidate from
-`GEMINI_REVIEW_PRO_MODELS` or `GEMINI_REVIEW_FLASH_MODELS` (comma-separated);
-their defaults are maintained by the gateway. `auto` routing is refused for
-review reproducibility. Artifacts record the requested value, the preflight
-selection, and the model(s) the CLI reports as resolved.
-
 ## Claude review tier policy
 
 Use the `sonnet` alias by default for a bounded, substantive adversarial review:
@@ -96,6 +86,48 @@ rejects it and checks `claude auth status` for `claude.ai` authentication.
 Disable usage credits in the Claude account if additional charges must be
 impossible. An approved list is an account policy, not a live entitlement
 check.
+
+The Gemini wrapper authenticates with an API key. Google-account sign-in was
+the intended path, but on 2026-10-02 Google rejected Gemini CLI OAuth logins
+("This client is no longer supported for Gemini Code Assist for individuals"),
+so the wrapper reverted to the key. It reads `GEMINI_API_KEY` from the
+environment, else from `REVIEWER_CREDENTIALS_FILE`, `.reviewers.env`, `.env`,
+or `agent/.env` under the target repository; a credentials file must be mode
+600. **API-key calls are billed with no CLI-side overage guard**: spend is
+bounded only by the budget cap on the key's Google Cloud project. The
+`included_no_credits` policy field is retained for selector compatibility and
+does not mean free here.
+
+The `gemini-model-policy.json` catalog records approved model IDs and release
+dates. The `pro`/`hard` review tier selects `gemini-3.8-flash`;
+`flash`/`routine` selects the second older approved release,
+`gemini-3.6-flash`. The tier names are retained for consumer compatibility;
+they do not imply the selected model's family. Concrete model IDs are accepted
+only when approved by the catalog. The wrapper requires the CLI response to
+report exactly the selected ID. A model appearing in the API `models.list`
+does not prove the key has quota for it.
+
+Each invocation points the CLI at the system settings file
+`/etc/reviewer-gateway/gemini-settings.json`, which enforces `gemini-api-key`
+authentication so the CLI cannot drift to another credential or billing path.
+Gemini CLI silently skips a system settings file unless the file and its
+parent directory are root-owned (a per-invocation temp file was ignored this
+way on 2026-10-02), so provision it once:
+
+```bash
+sudo mkdir -p /etc/reviewer-gateway
+echo '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}}}' \
+  | sudo tee /etc/reviewer-gateway/gemini-settings.json >/dev/null
+```
+
+The wrapper fails closed before staging the packet if the key or that file is
+missing, the file is not root-owned, is group/other writable, or does not
+enforce API-key auth, and after the call if the CLI reports skipping it.
+`GEMINI_REVIEW_SYSTEM_SETTINGS` overrides the path for isolated tests only; it
+skips the ownership check, and a real CLI would then skip the file and trip the
+post-call check. `GEMINI_MAX_TIME_SECONDS` bounds the CLI call (default 600
+seconds). Google and Vertex credential variables are removed before launch.
+The approved catalog must be reviewed when Google releases a new model.
 
 Run provider-free regression checks with:
 

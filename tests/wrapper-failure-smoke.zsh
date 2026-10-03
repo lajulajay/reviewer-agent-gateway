@@ -9,6 +9,11 @@ print 'Review prompt.' > "$test_root/prompt.md"
 print 'Safe packet fixture.' > "$test_root/packet/source.md"
 print 'Shared review prompt.' > "$test_root/shared/prompt.md"
 print 'Shared packet fixture.' > "$test_root/shared/packet.md"
+# A real run requires a root-owned file; the explicit override path is exercised
+# here, and the wrapper still validates its contents.
+print '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}}}' > "$test_root/gemini-settings.json"
+print '{"security":{"auth":{"selectedType":"oauth-personal"}}}' > "$test_root/gemini-settings-weak.json"
+export GEMINI_REVIEW_SYSTEM_SETTINGS="$test_root/gemini-settings.json" GEMINI_API_KEY=test
 
 cat > "$test_root/bin/claude" <<'EOF'
 #!/bin/zsh
@@ -57,38 +62,25 @@ EOF
 cat > "$test_root/bin/gemini" <<'EOF'
 #!/bin/zsh
 [[ -z "${GEMINI_MOCK_MARKER:-}" ]] || print -r -- "$*" > "$GEMINI_MOCK_MARKER"
-if [[ "${GEMINI_TEST_MODE:-}" == success ]]; then
+[[ "${GEMINI_TEST_MODE:-}" != hang ]] || sleep 30
+[[ "${GEMINI_TEST_MODE:-}" != skipped-settings ]] || print -u2 "Security Warning: Skipping system settings file '$GEMINI_CLI_SYSTEM_SETTINGS_PATH': Parent directory is insecure"
+if [[ "${GEMINI_TEST_MODE:-}" == success || "${GEMINI_TEST_MODE:-}" == skipped-settings ]]; then
+  [[ "${GEMINI_API_KEY:-}" == test && -z "${GOOGLE_API_KEY:-}" ]] || exit 77
+  jq -e '.security.auth.selectedType == "gemini-api-key" and .security.auth.enforcedType == "gemini-api-key"' "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" >/dev/null || exit 77
+  model=""
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == --model ]]; then model="$2"; break; fi
+    shift
+  done
   body=""
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
   body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nVERDICT: ACCEPT'
-  jq -n --arg response "$body" '{response:$response, stats:{models:{"gemini-3.1-pro-preview":{}}}}'
+  jq -n --arg response "$body" --arg model "${GEMINI_MOCK_RESOLVED:-$model}" '{response:$response, stats:{models:{($model):{}}}}'
   exit 0
 fi
 exit 42
 EOF
-cat > "$test_root/bin/curl" <<'EOF'
-#!/bin/zsh
-case "${GEMINI_CURL_TEST_MODE:-available}" in
-  unavailable)
-    print '{"models":[{"name":"models/gemini-3-flash-preview","supportedGenerationMethods":["generateContent"]}]}'
-    ;;
-  page-two)
-    if [[ "$*" == *"pageToken=next"* ]]; then
-      print '{"models":[{"name":"models/gemini-3.1-pro-preview","supportedGenerationMethods":["generateContent"]}]}'
-    else
-      print '{"models":[{"name":"models/gemini-3-flash-preview","supportedGenerationMethods":["generateContent"]}],"nextPageToken":"next"}'
-    fi
-    ;;
-  request-failure)
-    print -u2 'simulated models.list failure'
-    exit 22
-    ;;
-  *)
-    print '{"models":[{"name":"models/gemini-3.1-pro-preview","supportedGenerationMethods":["generateContent"]}]}'
-    ;;
-esac
-EOF
-chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/gemini" "$test_root/bin/curl"
+chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/gemini"
 cat > "$test_root/claude-policy.json" <<'EOF'
 {"hard_model":"claude-opus-5-5","routine_two_releases_down_scope":"all_models","models_newest_first":[
   {"id":"claude-sonnet-5-5","released_on":"2026-09-28","included_no_credits":true},
@@ -140,7 +132,7 @@ run_failure() {
 run_failure kimi-review.sh kimi-k2.6:cloud kimi.md
 : > "$test_root/.collab/claude.md.diagnostic.json"
 run_failure claude-review.sh sonnet claude.md
-run_failure gemini-review.sh gemini-3.1-pro-preview gemini.json
+run_failure gemini-review.sh hard gemini.json
 
 # Tier selection pins a full model ID and checks what Claude reports using.
 claude_marker="$test_root/claude-marker"
@@ -177,43 +169,69 @@ set -e
 [[ $code -eq 78 && -s "$test_root/.collab/claude-api-auth.diagnostic.json" ]]
 [[ ! -e "$test_root/.collab/claude-api-auth.md" ]]
 
-# Gemini availability preflight must reject before the CLI is started.
+# Gemini policy pins both tiers and rejects a resolved-model mismatch.
 gemini_marker="$test_root/gemini-marker"
 : > "$gemini_marker"
-set +e
-PATH="$test_root/bin:$PATH" GEMINI_API_KEY=test GEMINI_CURL_TEST_MODE=unavailable \
-  GEMINI_MOCK_MARKER="$gemini_marker" "$root/gemini-review.sh" gemini-2.5-pro \
-  "$test_root/prompt.md" "$test_root/.collab/gemini-unavailable.json" \
-  "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 74 ]]
-[[ -s "$test_root/.collab/gemini-unavailable.diagnostic.json" ]]
-[[ ! -s "$gemini_marker" ]] || { print -u2 "Gemini CLI ran despite failed preflight: $(<"$gemini_marker")"; exit 1; }
+PATH="$test_root/bin:$PATH" GEMINI_API_KEY=test GEMINI_TEST_MODE=success \
+  GEMINI_MOCK_MARKER="$gemini_marker" "$root/gemini-review.sh" pro \
+  "$test_root/prompt.md" "$test_root/.collab/gemini-hard.json" \
+  "$test_root/packet/source.md" >/dev/null
+grep -F -- '--model gemini-3.8-flash' "$gemini_marker" >/dev/null
+jq -e '.reviewer_metadata.requested_model == "pro" and .reviewer_metadata.preflight_selected_model == "gemini-3.8-flash"' \
+  "$test_root/.collab/gemini-hard.json" >/dev/null
+[[ -s "$test_root/.collab/gemini-hard.json.sha256" ]]
 
-# Capability profiles select account-available models from later list pages.
-: > "$gemini_marker"
-set +e
-PATH="$test_root/bin:$PATH" GEMINI_API_KEY=test GEMINI_CURL_TEST_MODE=page-two \
-  GEMINI_TEST_MODE=success GEMINI_MOCK_MARKER="$gemini_marker" "$root/gemini-review.sh" pro \
-  "$test_root/prompt.md" "$test_root/.collab/gemini-page-two.json" \
-  "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 0 ]]
-grep -F -- '--model gemini-3.1-pro-preview' "$gemini_marker" >/dev/null
-jq -e '.reviewer_metadata.requested_model == "pro" and .reviewer_metadata.preflight_selected_model == "gemini-3.1-pro-preview"' \
-  "$test_root/.collab/gemini-page-two.json" >/dev/null
-[[ -s "$test_root/.collab/gemini-page-two.json.sha256" ]]
+PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success \
+  GEMINI_MOCK_MARKER="$gemini_marker" "$root/gemini-review.sh" flash \
+  "$test_root/prompt.md" "$test_root/.collab/gemini-routine.json" \
+  "$test_root/packet/source.md" >/dev/null
+grep -F -- '--model gemini-3.6-flash' "$gemini_marker" >/dev/null
 
 set +e
-PATH="$test_root/bin:$PATH" GEMINI_API_KEY=test GEMINI_CURL_TEST_MODE=request-failure \
+PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success GEMINI_MOCK_RESOLVED=gemini-3.7-flash \
   "$root/gemini-review.sh" pro "$test_root/prompt.md" \
-  "$test_root/.collab/gemini-preflight-failure.json" "$test_root/packet/source.md" >/dev/null 2>&1
+  "$test_root/.collab/gemini-mismatch.json" "$test_root/packet/source.md" >/dev/null 2>&1
 code=$?
 set -e
-[[ $code -eq 74 ]]
-[[ -s "$test_root/.collab/gemini-preflight-failure.diagnostic.json" ]]
+[[ $code -eq 74 && -s "$test_root/.collab/gemini-mismatch.diagnostic.json" ]]
+[[ ! -e "$test_root/.collab/gemini-mismatch.json" ]]
+
+# A CLI that skipped the enforced settings ran without the login/no-overage
+# guarantees; its otherwise valid review must not be captured.
+set +e
+PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=skipped-settings \
+  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
+  "$test_root/.collab/gemini-skipped.json" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 78 && -s "$test_root/.collab/gemini-skipped.diagnostic.json" ]]
+[[ ! -e "$test_root/.collab/gemini-skipped.json" ]]
+
+set +e
+PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success GEMINI_REVIEW_SYSTEM_SETTINGS="$test_root/gemini-settings-weak.json" \
+  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
+  "$test_root/.collab/gemini-weak.json" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 78 && -s "$test_root/.collab/gemini-weak.diagnostic.json" ]]
+
+set +e
+PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=hang GEMINI_MAX_TIME_SECONDS=1 \
+  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
+  "$test_root/.collab/gemini-timeout.json" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 70 ]]
+jq -e '.reason == "Gemini invocation timed out"' "$test_root/.collab/gemini-timeout.diagnostic.json" >/dev/null
+
+# No key in the environment or any credentials file fails before staging.
+set +e
+env -u GEMINI_API_KEY PATH="$test_root/bin:$PATH" GEMINI_TEST_MODE=success \
+  "$root/gemini-review.sh" pro "$test_root/prompt.md" \
+  "$test_root/.collab/gemini-nokey.json" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 78 && -s "$test_root/.collab/gemini-nokey.diagnostic.json" ]]
 
 set +e
 PATH="$test_root/bin:$PATH" \
