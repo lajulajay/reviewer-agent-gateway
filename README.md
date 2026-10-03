@@ -1,8 +1,9 @@
 # Reviewer Agent Gateway
 
-Canonical isolated Kimi, Claude, and Gemini reviewer wrappers for the
+Canonical isolated Claude, Codex, Gemini, and Kimi reviewer wrappers for the
 prediction-market repositories and other projects. Consumer repositories keep
-small tracked entrypoints that delegate here.
+small tracked entrypoints that delegate here. Roles, escalation, and review
+records are defined in [PROTOCOL.md](PROTOCOL.md).
 
 Kimi runs through Ollama, but the current signed-in account has no entitlement
 to either Kimi cloud model. `ollama list` may show `kimi-k2.6:cloud` even when
@@ -14,7 +15,7 @@ Moonshot API credentials or endpoints.
 Invocation contract:
 
 ```text
-reviewer.sh [--packet-root DIR] MODEL PROMPT OUTPUT PACKET...
+reviewer.sh [--packet-root DIR] [--owner codex|claude] MODEL PROMPT OUTPUT PACKET...
 ```
 
 For Kimi, use `OLLAMA_MAX_TIME_SECONDS` for the wrapper timeout; it defaults
@@ -31,10 +32,15 @@ review prose. Failed calls write a
 non-overwritable `.diagnostic.json` beside the requested output whenever the
 output location is usable.
 
-Canonical active escalation: Claude is the primary reviewer and Gemini is the
-second reviewer when Claude is unavailable or a decision-material disagreement
-remains unresolved. Kimi is inactive while Moonshot membership access is
-pending; it may be reconsidered only after explicit reactivation.
+`--owner` names the agent that owns the work under review. It is optional for
+compatibility but [PROTOCOL.md](PROTOCOL.md) requires it: the Claude wrapper
+refuses `--owner claude`, the Codex wrapper refuses `--owner codex`, and every
+wrapper records the owner in its artifact or diagnostic.
+
+Active roles: Codex and Claude interchangeably own work, the non-owner is the
+primary reviewer, and Gemini is always the backup. Kimi is inactive while
+Moonshot membership access is pending; it may be reconsidered only after
+explicit reactivation.
 
 ## Claude review tier policy
 
@@ -56,7 +62,7 @@ a ceremonial second opinion or model vote.
 The owner chooses the smallest sufficient tier before invocation and records
 the requested alias, resolved model(s), and a one-sentence tier rationale in
 the review artifact or its `COLLAB.md` disposition. `opus` does not replace the
-Claude-to-Gemini escalation rule: unresolved empirical questions still return
+escalation rule in PROTOCOL.md: unresolved empirical questions still return
 to evidence or a frozen test, and unresolved policy choices return to the
 sponsor.
 
@@ -86,6 +92,33 @@ rejects it and checks `claude auth status` for `claude.ai` authentication.
 Disable usage credits in the Claude account if additional charges must be
 impossible. An approved list is an account policy, not a live entitlement
 check.
+
+## Codex reviews
+
+`codex-review.sh` runs `codex exec` on the ChatGPT plan. It refuses
+`OPENAI_API_KEY`/`CODEX_API_KEY` and requires `codex login status` to report
+ChatGPT sign-in. `codex-model-policy.json` maps the `routine` and `hard` tiers
+to a model and reasoning effort (currently `gpt-6-sol` at `medium` and
+`high`). Update it from the models the account offers.
+
+The interactive Codex config is not used: it runs with
+`danger-full-access`, never asks for approval, and enables plugins. The review
+runs with `--ignore-user-config --ignore-rules --ephemeral -s read-only` from an
+empty workspace, with web search off and the features that expose tools
+disabled (apps, plugins, shell and exec, code-mode host, subagents,
+browser/computer use, image generation, skill search, goals, hooks). The
+prompt and packet are sent on stdin. Verified with codex-cli 0.159.3 on
+2026-10-02: shell, file reads, `apply_patch` (still listed, but it runs
+through the disabled code-mode host), app connectors, web, and image tools
+all fail. Subagent spawn also fails, but only because `--ephemeral` leaves no
+session to fork, so do not rely on that as a policy. Tool errors after the
+turn starts are counted in the artifact's `Blocked tool attempts` line.
+
+`codex exec` does not report the serving model, so the artifact records the
+requested tier, selected model, and effort, and says the resolved model was
+not reported. `CODEX_MAX_TIME_SECONDS` bounds the call (default 600).
+`CODEX_REVIEW_MODEL_POLICY` may point to another policy file for an isolated
+test.
 
 ## Gemini reviews through Antigravity CLI
 

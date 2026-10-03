@@ -1,0 +1,6 @@
+{
+  "tiers": {
+    "hard": {"model": "gpt-6-sol", "reasoning_effort": "high"},
+    "routine": {"model": "gpt-6-sol", "reasoning_effort": "medium"}
+  }
+}

@@ -2,12 +2,15 @@
 set -euo pipefail
 umask 077
 
-packet_root=""
-if [[ "${1:-}" == "--packet-root" ]]; then
-  [[ $# -ge 2 ]] || { print -u2 "missing --packet-root value"; exit 64; }
-  packet_root="$2"; shift 2
-fi
-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] <ollama-model> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
+packet_root=""; owner=""
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
+    *) print -u2 "unknown option: $1"; exit 64 ;;
+  esac
+done
+[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <ollama-model> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
 model="$1"; prompt="$2"; output="$3"; shift 3
 case "$model" in
   kimi-k2.6:cloud|kimi-k3:cloud) ;;
@@ -87,6 +90,7 @@ python3 "$(dirname "$0")/reviewer-validate.py" < "$stdout" || fail 70 "Ollama re
 {
   print '# Kimi review'
   print ''
+  [[ -z "$owner" ]] || print "Owner: $owner"
   print "Provider: Ollama"
   print "Requested model: $model"
   print "Resolved model: $model"

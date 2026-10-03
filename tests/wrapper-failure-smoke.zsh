@@ -86,7 +86,37 @@ if [[ "${AGY_TEST_MODE:-}" == success || "${AGY_TEST_MODE:-}" == tool ]]; then
 fi
 exit 42
 EOF
-chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/agy"
+cat > "$test_root/bin/codex" <<'EOF'
+#!/bin/zsh
+[[ "$1" != --version ]] || { print codex-cli 0.159.3; exit 0; }
+if [[ "$1" == login && "$2" == status ]]; then print "${CODEX_MOCK_LOGIN:-Logged in using ChatGPT}"; exit 0; fi
+[[ "$1" == exec ]] || exit 64
+[[ -z "${CODEX_MOCK_MARKER:-}" ]] || print -r -- "$*" > "$CODEX_MOCK_MARKER"
+# Every review call must load no user config, persist nothing, and expose no tools.
+[[ -z "${OPENAI_API_KEY:-}" ]] || exit 77
+for flag in --ephemeral --ignore-user-config --ignore-rules "-s read-only" "--disable shell_tool" "--disable apps" "--disable code_mode_host" "--disable multi_agent"; do
+  [[ " $* " == *" $flag "* ]] || { print -u2 "missing $flag"; exit 77; }
+done
+out=""; args=("$@")
+for i in {1..$#args}; do [[ "${args[$i]}" != -o ]] || out="${args[$((i+1))]}"; done
+input="$(cat)"; [[ -z "${CODEX_MOCK_STDIN:-}" ]] || print -r -- "$input" > "$CODEX_MOCK_STDIN"
+[[ "${CODEX_TEST_MODE:-}" != hang ]] || sleep 30
+print '{"type":"thread.started","thread_id":"t"}'
+print '{"type":"item.completed","item":{"type":"error","message":"Code Mode is unavailable because code-mode host is disabled."}}'
+print '{"type":"turn.started"}'
+[[ "${CODEX_TEST_MODE:-}" != tool ]] || print '{"type":"item.completed","item":{"type":"error","message":"code-mode host is disabled"}}'
+case "${CODEX_TEST_MODE:-}" in
+  success|tool)
+    body=""
+    for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
+    print -r -- "$body"$'\n\nVERDICT: ACCEPT' > "$out"
+    print '{"type":"turn.completed","usage":{"input_tokens":1}}'
+    exit 0 ;;
+  incomplete) print -r -- "partial" > "$out"; exit 0 ;;
+esac
+exit 42
+EOF
+chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/agy" "$test_root/bin/codex"
 cat > "$test_root/claude-policy.json" <<'EOF'
 {"hard_model":"claude-opus-5-5","routine_two_releases_down_scope":"all_models","models_newest_first":[
   {"id":"claude-sonnet-5-5","released_on":"2026-09-28","included_no_credits":true},
@@ -108,7 +138,7 @@ EOF
 # This fixture deliberately passes no arguments, so it cannot invoke a provider.
 consumer_root="$test_root/prediction-markets/shim-consumer"
 mkdir -p "$consumer_root/reviewers" "$test_root/reviewer-agent-gateway"
-for wrapper in claude-review.sh gemini-review.sh kimi-review.sh; do
+for wrapper in claude-review.sh codex-review.sh gemini-review.sh kimi-review.sh; do
   cp "$root/$wrapper" "$test_root/reviewer-agent-gateway/$wrapper"
   cat > "$consumer_root/reviewers/$wrapper" <<EOF
 #!/bin/zsh
@@ -224,6 +254,57 @@ gemini_fails 78 gemini-low-quota.json env AGY_TEST_MODE=success AGY_MOCK_QUOTA=0
 
 gemini_fails 70 gemini-timeout.json env AGY_TEST_MODE=hang GEMINI_MAX_TIME_SECONDS=1 GEMINI_TIMEOUT_GRACE_SECONDS=1
 jq -e '.reason == "Gemini invocation timed out"' "$test_root/.collab/gemini-timeout.diagnostic.json" >/dev/null
+
+# Codex reviewer: tiers pin model and effort; isolation flags are enforced by the mock.
+codex_marker="$test_root/codex-marker"; codex_stdin="$test_root/codex-stdin"
+codex_review() {
+  local tier="$1" output="$2"; shift 2
+  PATH="$test_root/bin:$PATH" CODEX_MOCK_MARKER="$codex_marker" CODEX_MOCK_STDIN="$codex_stdin" "$@" \
+    "$root/codex-review.sh" --owner claude "$tier" "$test_root/prompt.md" "$test_root/.collab/$output" "$test_root/packet/source.md"
+}
+codex_fails() {
+  local expected="$1" tier="$2" output="$3"; shift 3
+  set +e; codex_review "$tier" "$output" "$@" >/dev/null 2>&1; local code=$?; set -e
+  [[ $code -eq $expected && -s "$test_root/.collab/${output%.md}.diagnostic.json" && ! -e "$test_root/.collab/$output" ]] \
+    || { print -u2 "codex $output: expected exit $expected, got $code"; exit 1; }
+}
+codex_review hard codex-hard.md env CODEX_TEST_MODE=success >/dev/null
+grep -F -- '-m gpt-6-sol' "$codex_marker" >/dev/null
+grep -F -- 'model_reasoning_effort="high"' "$codex_marker" >/dev/null
+grep -F -- 'Safe packet fixture.' "$codex_stdin" >/dev/null
+for line in 'Owner: claude' 'Selected model: gpt-6-sol' 'Reasoning effort: high' 'Blocked tool attempts: 0' 'VERDICT: ACCEPT'; do
+  grep -Fx -- "$line" "$test_root/.collab/codex-hard.md" >/dev/null || { print -u2 "codex-hard.md missing: $line"; exit 1; }
+done
+[[ -s "$test_root/.collab/codex-hard.md.sha256" ]]
+codex_review routine codex-routine.md env CODEX_TEST_MODE=success >/dev/null
+grep -F -- 'model_reasoning_effort="medium"' "$codex_marker" >/dev/null
+codex_review hard codex-tool.md env CODEX_TEST_MODE=tool >/dev/null
+grep -Fx 'Blocked tool attempts: 1' "$test_root/.collab/codex-tool.md" >/dev/null
+codex_fails 78 pro codex-badtier.md env CODEX_TEST_MODE=success
+codex_fails 78 hard codex-apikey.md env CODEX_TEST_MODE=success OPENAI_API_KEY=test
+codex_fails 78 hard codex-apilogin.md env CODEX_TEST_MODE=success CODEX_MOCK_LOGIN='Logged in using an API key'
+codex_fails 70 hard codex-failure.md env CODEX_TEST_MODE=fail
+codex_fails 70 hard codex-incomplete.md env CODEX_TEST_MODE=incomplete
+codex_fails 70 hard codex-timeout.md env CODEX_TEST_MODE=hang CODEX_MAX_TIME_SECONDS=1
+jq -e '.reason == "Codex invocation timed out" and .owner == "claude"' "$test_root/.collab/codex-timeout.diagnostic.json" >/dev/null
+
+# An agent never reviews work it owns; owner is recorded on every reviewer.
+owner_rejects() {
+  set +e; PATH="$test_root/bin:$PATH" "$@" >/dev/null 2>&1; local code=$?; set -e
+  [[ $code -eq 64 ]] || { print -u2 "expected usage rejection (64), got $code: $*"; exit 1; }
+}
+owner_rejects "$root/claude-review.sh" --owner claude sonnet "$test_root/prompt.md" "$test_root/.collab/self-claude.md" "$test_root/packet/source.md"
+owner_rejects "$root/codex-review.sh" --owner codex hard "$test_root/prompt.md" "$test_root/.collab/self-codex.md" "$test_root/packet/source.md"
+owner_rejects "$root/gemini-review.sh" --owner gemini pro "$test_root/prompt.md" "$test_root/.collab/bad-owner.json" "$test_root/packet/source.md"
+owner_rejects "$root/kimi-review.sh" --reviewer kimi kimi-k2.6:cloud "$test_root/prompt.md" "$test_root/.collab/bad-option.md" "$test_root/packet/source.md"
+[[ ! -e "$test_root/.collab/self-claude.diagnostic.json" && ! -e "$test_root/.collab/self-codex.diagnostic.json" ]]
+PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
+  "$root/claude-review.sh" --owner codex sonnet "$test_root/prompt.md" \
+  "$test_root/.collab/claude-owned.md" "$test_root/packet/source.md" >/dev/null
+grep -Fx 'Owner: codex' "$test_root/.collab/claude-owned.md" >/dev/null
+PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --packet-root "$test_root/shared" --owner claude pro \
+  "$test_root/prompt.md" "$test_root/.collab/gemini-owned.json" "$test_root/packet/source.md" >/dev/null
+jq -e '.reviewer_metadata.owner == "claude"' "$test_root/.collab/gemini-owned.json" >/dev/null
 
 set +e
 PATH="$test_root/bin:$PATH" \
