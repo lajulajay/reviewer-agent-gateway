@@ -45,6 +45,7 @@ changed by this workstream until the user approves a rollout.
 | r02 (v2) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r02.md` | REJECT |
 | r03 (v3) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r03.md` | REJECT |
 | r04 (v4) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r04.md` | REJECT |
+| r05 (v5) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r05.md` | REJECT |
 
 ## Findings and conditions
 
@@ -102,6 +103,21 @@ changed by this workstream until the user approves a rollout.
 | R04-F10 | major | New untracked/ignored files not inventoried at transfer | Accepted: inventory output required in handoff block | resolved in v5 |
 | R04-F11 | major | Recorded HEAD may not be the standards actually loaded | Partially accepted: reviewers never receive standards text, so the governing standards are the wrapper's checkout; wrapper refuses to run with uncommitted standards/wrapper changes and records HEAD | resolved in v5 |
 | R04-F12 | minor | v4 misstates D5 | Accepted: v5 records D5 as done (0205f91) | resolved in v5 |
+| R05-F1 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
+| R05-F2 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
+| R05-F3 | blocker | (see r05) | Accepted: quote must name the finding and affirm resolution; tool checks quote occurs in the review | resolved in v6 |
+| R05-F4 | major | (see r05) | Accepted: rejection cites scoped decision or changed fact | resolved in v6 |
+| R05-F5 | major | (see r05) | Accepted: header-based discovery rule; ambiguous .collab files fail | resolved in v6 |
+| R05-F6 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
+| R05-F7 | minor | (see r05) | Accepted (see F13) | resolved in v6 |
+| R05-F8 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
+| R05-F9 | minor | (see r05) | Accepted (see F13) | resolved in v6 |
+| R05-F10 | minor | (see r05) | Accepted (see F14) | resolved in v6 |
+| R05-F11 | blocker | (see r05) | Accepted: claim narrowed to wrapper provenance; pin governs owner process | resolved in v6 |
+| R05-F12 | minor | (see r05) | Accepted (unchanged) | resolved in v6 |
+| R05-F13 | major | (see r05) | Accepted: baseline is the effective limit; never raised | resolved in v6 |
+| R05-F14 | major | (see r05) | Accepted: inventory recorded as command, counts, needed files | resolved in v6 |
+| R05-F15 | major | (see r05) | Accepted: compact rows keyed to artifact and ID; exact text read from artifact | resolved in v6 |
 
 ## Log
 
@@ -124,3 +140,6 @@ changed by this workstream until the user approves a rollout.
   commit `0205f91` (95 files, 1.18 MB, secret scan clean). No remote yet.
 - 2026-10-03: r04 Codex REJECT (1 blocker; 7 items satisfied within pilot scope). All
   accepted (F11 partially). v5 = v4 plus targeted edits tagged R04.
+- 2026-10-03: r05 Codex REJECT (2 blockers, both refinements; 3 majors from v5's own
+  edits). All accepted. v6 = v5 plus targeted edits tagged R05. Owner
+  recommendation: stop paper rounds; next review is of the implementation.
