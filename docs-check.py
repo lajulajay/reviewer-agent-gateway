@@ -358,9 +358,11 @@ def record(repo):
                 if rev == "unversioned" or rev.endswith("(dirty)"):
                     errors.append(f"{name}: r{rnd:02d} captured from an unversioned or dirty wrapper ({rev})")
                 elif pin:
-                    code, _ = git(GATEWAY, "merge-base", "--is-ancestor", pin, rev.split()[0])
+                    # A review may use the pinned standards or older ones in force when
+                    # it was captured; never newer standards than the branch declares.
+                    code, _ = git(GATEWAY, "merge-base", "--is-ancestor", rev.split()[0], pin)
                     if code != 0:
-                        errors.append(f"{name}: r{rnd:02d} wrapper revision {rev[:12]} is not the standards pin {pin[:12]} or a descendant")
+                        errors.append(f"{name}: r{rnd:02d} wrapper revision {rev[:12]} is newer than, or unrelated to, the standards pin {pin[:12]}")
         for rid in ws.rows:
             if int(ROW_ID.match(rid).group(1)) not in ws.reviews:
                 errors.append(f"{name}: row {rid} refers to a round missing from the review index")

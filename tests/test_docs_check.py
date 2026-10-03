@@ -237,6 +237,16 @@ class DocsCheckTest(unittest.TestCase):
         code, out = self.record()
         self.assertEqual(code, 0, out)
 
+    def test_wrapper_revision_must_not_be_newer_than_pin(self):
+        parent = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD~1"], capture_output=True, text=True).stdout.strip()
+        self.f.workstream(GOOD_ROWS)
+        self.f.artifact("codex-x-r01.md", REVIEW1.replace("{rev}", parent))
+        code, out = self.record()
+        self.assertEqual(code, 0, out)  # older standards than the pin are fine
+        (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{parent}\n")
+        self.assertIn("r02 wrapper revision", self.record()[1])  # r02 ran newer standards than the pin
+        self.assertIn("newer than, or unrelated to, the standards pin", self.record()[1])
+
     def test_adopted_repo_needs_baseline(self):
         self.f.workstream(GOOD_ROWS)
         (self.f.repo / "docs-baseline.json").unlink()
