@@ -18,6 +18,11 @@ response="$tmp/stream.jsonl"; stderr="$tmp/stderr"; hook_log="$tmp/hook.log"; di
 : > "$response"; : > "$stderr"; : > "$hook_log"
 fail() { local code="$1" reason="$2"; if [[ ! -s "$diagnostic" ]]; then jq -n --arg owner "$owner" --arg requested "$requested_model" --arg selected "${selected_model:-}" --arg reason "$reason" --arg code "$code" --arg elapsed "$((SECONDS-start))" --rawfile stdout "$response" --rawfile stderr "$stderr" '{provider:"gemini",cli:"agy",owner:$owner,requested_model:$requested,preflight_selected_model:$selected,reason:$reason,exit_code:($code|tonumber),elapsed_seconds:($elapsed|tonumber),stdout:$stdout,stderr:$stderr}' > "$tmp/diagnostic.json" && chmod 444 "$tmp/diagnostic.json" && mv -f "$tmp/diagnostic.json" "$diagnostic"; fi; print -u2 "$reason; diagnostics captured at $diagnostic"; exit "$code"; }
 safe() { local f="$1" label="$2"; [[ -f "$f" && ! -L "$f" ]] || fail 66 "$label is not a regular file"; f="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"; if [[ -n "$packet_root" ]]; then local pr="$(cd "$packet_root" 2>/dev/null && pwd -P)"; case "$f" in "$root"/*|"$pr"/*) ;; *) fail 77 "$label is outside allowed roots";; esac; else case "$f" in "$root"/*) ;; *) fail 77 "$label must be inside repo or use --packet-root";; esac; fi; case "$f" in */.env|*/.env.*|*/.reviewers.env|*/data/*|*/exports/*|*/artifacts/private/*|*.pem|*.key) fail 77 "refusing private $label";; esac; REPLY="$f"; }
+# Provenance (workspace framework v6 §7): record the gateway commit this wrapper
+# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
+# is for the provider-free tests only; it is recorded as "(dirty)".
+wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
+if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
 command -v agy >/dev/null || fail 69 "agy (Antigravity CLI) not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
 # Reviews run on the signed-in Google account's plan quota. An API key would
 # switch agy to billed Gemini API calls, so its presence is refused.
@@ -49,10 +54,7 @@ prompt_text+="
 
 TOOLS: None are available; every tool call is denied. Review only the text above.
 
-OUTPUT CONTRACT: Return a substantive review, not procedural narration. Your
-final non-empty line must be exactly one of: VERDICT: ACCEPT; VERDICT: ACCEPT
-WITH CONDITIONS; VERDICT: REJECT. Do not use any other verdict label or mention
-another verdict line."
+$(<"$(dirname "$0")/output-contract.txt")"
 max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
 [[ "$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
 run_agy() { (cd "$workspace" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_GENAI_USE_VERTEXAI -u GOOGLE_GENAI_USE_GCA -u GOOGLE_CLOUD_PROJECT "$@"); }
@@ -86,6 +88,6 @@ resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response" 
 [[ "$resolved" == "$model" ]] || fail 74 "Gemini resolved outside selected model"
 jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
 denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
-jq --arg owner "$owner" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" \
-  '. + {reviewer_metadata:{owner:$owner,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied}}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" \
+  '. + {reviewer_metadata:{owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied}}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
 chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"

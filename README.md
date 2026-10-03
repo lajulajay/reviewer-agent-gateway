@@ -178,6 +178,7 @@ Run provider-free regression checks with:
 
 ```bash
 tests/wrapper-failure-smoke.zsh
+python3 tests/test_docs_check.py
 ```
 
 This includes a consumer-shim resolution fixture: each shim is invoked without

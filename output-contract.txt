@@ -1,0 +1,7 @@
+OUTPUT CONTRACT: Return a substantive review, not procedural narration. Write
+each finding on its own line as `F<n> [blocker|major|minor]: <text>` and each
+condition of acceptance as `C<n>: <text>`, numbering each kind from 1. After
+the findings and conditions, write the line `ATTESTATION: all actionable
+findings and conditions are labeled.` Your final non-empty line must be
+exactly one of: VERDICT: ACCEPT; VERDICT: ACCEPT WITH CONDITIONS; VERDICT:
+REJECT. Do not use any other verdict label or mention another verdict line.

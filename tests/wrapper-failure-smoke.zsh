@@ -10,6 +10,8 @@ print 'Safe packet fixture.' > "$test_root/packet/source.md"
 print 'Shared review prompt.' > "$test_root/shared/prompt.md"
 print 'Shared packet fixture.' > "$test_root/shared/packet.md"
 unset GEMINI_API_KEY GOOGLE_API_KEY
+# Development runs use the working copy; wrappers record it as "(dirty)".
+export REVIEWER_ALLOW_DIRTY_WRAPPER=1
 
 cat > "$test_root/bin/claude" <<'EOF'
 #!/bin/zsh
@@ -26,7 +28,7 @@ if [[ "${CLAUDE_TEST_MODE:-}" == success ]]; then
   [[ -z "${CLAUDE_MOCK_MARKER:-}" ]] || print -r -- "$model" > "$CLAUDE_MOCK_MARKER"
   body=""
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
-  body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nVERDICT: ACCEPT'
+  body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
   jq -n --arg model "${CLAUDE_MOCK_RESOLVED:-$model}" --arg result "$body" '{is_error:false,result:$result,modelUsage:{($model):{}}}'
   exit 0
 fi
@@ -45,6 +47,7 @@ if [[ "${OLLAMA_TEST_MODE:-}" == success ]]; then
   for i in {1..8}; do
     print 'Finding: the supplied packet is internally consistent, its stated invariants are testable, no unsafe state mutation is requested, and the implementation should preserve the reviewed input boundaries and independently verifiable artifact contract.'
   done
+  print 'ATTESTATION: all actionable findings and conditions are labeled.'
   print 'VERDICT: ACCEPT'
   exit 0
 fi
@@ -80,7 +83,7 @@ fi
 if [[ "${AGY_TEST_MODE:-}" == success || "${AGY_TEST_MODE:-}" == tool ]]; then
   body=""
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
-  body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nVERDICT: ACCEPT'
+  body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
   jq -nc --arg response "$body" '{event:"result",result:{conversation_id:"conv-test",status:"SUCCESS",response:$response,usage:{total_tokens:1}}}'
   exit 0
 fi
@@ -109,7 +112,7 @@ case "${CODEX_TEST_MODE:-}" in
   success|tool)
     body=""
     for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
-    print -r -- "$body"$'\n\nVERDICT: ACCEPT' > "$out"
+    print -r -- "$body"$'\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT' > "$out"
     print '{"type":"turn.completed","usage":{"input_tokens":1}}'
     exit 0 ;;
   incomplete) print -r -- "partial" > "$out"; exit 0 ;;
@@ -276,6 +279,8 @@ for line in 'Owner: claude' 'Selected model: gpt-6-sol' 'Reasoning effort: high'
   grep -Fx -- "$line" "$test_root/.collab/codex-hard.md" >/dev/null || { print -u2 "codex-hard.md missing: $line"; exit 1; }
 done
 [[ -s "$test_root/.collab/codex-hard.md.sha256" ]]
+grep -E '^Wrapper revision: [0-9a-f]{40}( \(dirty\))?$' "$test_root/.collab/codex-hard.md" >/dev/null
+jq -e '.reviewer_metadata.wrapper_revision | test("^[0-9a-f]{40}")' "$test_root/.collab/gemini-hard.json" >/dev/null
 codex_review routine codex-routine.md env CODEX_TEST_MODE=success >/dev/null
 grep -F -- 'model_reasoning_effort="medium"' "$codex_marker" >/dev/null
 codex_review hard codex-tool.md env CODEX_TEST_MODE=tool >/dev/null
@@ -337,8 +342,17 @@ import subprocess
 import sys
 validator = sys.argv[1]
 body = "The review contains substantive findings. " * 20
-text = body + "\n\n**VERDICT: ACCEPT WITH CONDITIONS**\n"
+text = body + "\n\nF1 [minor]: a finding.\n**C1:** a condition.\n\n**ATTESTATION: all actionable findings and conditions are labeled.**\n\n**VERDICT: ACCEPT WITH CONDITIONS**\n"
 assert subprocess.run([validator], input=text, text=True).returncode == 0
+labeled = body + "\nF1 [blocker]: broken.\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n"
+assert subprocess.run([validator], input=labeled, text=True).returncode == 0
+for invalid_label in (
+    body + "\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n",
+    body + "\nF1 [minor]: x\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: ACCEPT WITH CONDITIONS\n",
+    body + "\nF1 [minor]: x\nF1 [major]: y\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n",
+    body + "\nF1 [blocker]: x\nVERDICT: REJECT\n",
+):
+    assert subprocess.run([validator], input=invalid_label, text=True, capture_output=True).returncode != 0
 for invalid in (
     body + "\nVERDICT: CONDITIONAL\n",
     body + "\nVERDICT: ACCEPT\nVERDICT: REJECT\n",

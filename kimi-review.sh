@@ -51,6 +51,11 @@ safe() {
   case "$f" in */.env|*/.env.*|*/.reviewers.env|*/data/*|*/exports/*|*/artifacts/private/*|*.pem|*.key) fail 77 "refusing private $label";; esac
   REPLY="$f"
 }
+# Provenance (workspace framework v6 §7): record the gateway commit this wrapper
+# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
+# is for the provider-free tests only; it is recorded as "(dirty)".
+wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
+if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
 
 command -v ollama >/dev/null || fail 69 "Ollama CLI not found"
 command -v jq >/dev/null || fail 69 "jq is required"
@@ -70,7 +75,7 @@ done
 {
   print -r -- 'You are an isolated, adversarial, read-only code reviewer.'
   print -r -- 'Use only the supplied prompt and packet. Do not propose or perform state mutation.'
-  print -r -- 'Return substantive review text. Its final non-empty line must be exactly one of: VERDICT: ACCEPT; VERDICT: ACCEPT WITH CONDITIONS; VERDICT: REJECT. Do not use any other verdict label or mention another verdict line.'
+  cat "$(dirname "$0")/output-contract.txt"
   print -r -- "\n===== REVIEW PROMPT =====\n"
   cat "$prompt"
   for f in "$packet"/*; do print -r -- "\n\n===== $(basename "$f") =====\n"; cat "$f"; done
@@ -91,6 +96,7 @@ python3 "$(dirname "$0")/reviewer-validate.py" < "$stdout" || fail 70 "Ollama re
   print '# Kimi review'
   print ''
   [[ -z "$owner" ]] || print "Owner: $owner"
+  print "Wrapper revision: $wrapper_rev"
   print "Provider: Ollama"
   print "Requested model: $model"
   print "Resolved model: $model"

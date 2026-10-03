@@ -37,6 +37,10 @@ changed by this workstream until the user approves a rollout.
   problem"; STATUS.md treated as RAM with character limits; occasional
   cleanup.
 
+- 2026-10-03, user, scope: this workstream's next step. Quote: "agree on moving on
+  to pilot". Paper review rounds stop at r05/v6; the next review covers the
+  implementation.
+
 ## Reviews
 
 | Round | Reviewer | Tier | Artifact | Verdict |

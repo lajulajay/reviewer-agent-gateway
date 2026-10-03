@@ -84,11 +84,14 @@ lower-tier round. Model mappings and per-provider details are in
 - A successful review is substantive and ends with exactly one
   `VERDICT: ACCEPT`, `VERDICT: ACCEPT WITH CONDITIONS`, or `VERDICT: REJECT`.
 - **Never edit a `.collab/` file after it is written.**
-- The owner transcribes each review into `COLLAB.md` **verbatim** under a
-  heading naming the reviewer, and records the owner, tier, model(s), token
-  usage or quota, and the owner's disposition of each finding. The raw
-  artifact exists so the owner's relay of critique of its own work can be
-  audited.
+- Reviews are not transcribed into `COLLAB.md` (user decision 2026-10-03).
+  Each review is indexed in its workstream file (`workstreams/`, template in
+  `templates/workstream.md`) and every labeled finding and condition gets a
+  compact disposition row; the exact text stays in the committed raw artifact.
+  `docs-check.py record|transfer|done` verifies completeness, closure evidence,
+  checksums, and budgets. Reviewers label findings `F<n> [severity]:` and
+  conditions `C<n>:` and attest to it (`output-contract.txt`); wrappers fail
+  closed otherwise.
 - The owner independently verifies findings and requests another round only
   after a material design or implementation change, providing the delta
   rather than replaying history.
