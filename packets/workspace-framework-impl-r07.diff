@@ -1,0 +1,945 @@
+diff --git a/.collab/codex-2026-10-03-workspace-framework-r06.md b/.collab/codex-2026-10-03-workspace-framework-r06.md
+new file mode 100644
+index 0000000..0990805
+--- /dev/null
++++ b/.collab/codex-2026-10-03-workspace-framework-r06.md
+@@ -0,0 +1,47 @@
++# Codex review
++
++Owner: claude
++Wrapper revision: 39cf9d31fea18b68cecd5ccd2185ab97cb40f842
++Requested model: hard
++Selected model: gpt-6-sol
++Reasoning effort: high
++Resolved model(s): not reported by codex exec
++CLI version: codex-cli 0.159.3
++Blocked tool attempts: 0
++
++**R05-F3 remains open.** V6 requires a later review quote to name the finding and affirm that its specific issue is resolved. `disposition_errors()` checks only that the quote appears in the later artifact. A row citing `"R01-F1 remains open"` would pass.
++
++**R05-F11 remains open.** The wrappers record a revision, but `REVIEWER_ALLOW_DIRTY_WRAPPER` lets them run with uncommitted changes. A failed `git status` also produces an empty result and passes the guard. The `(dirty)` marker is useful, but it does not make the stated refusal true.
++
++The packet does not include the wording of Round-5 conditions C1–C6, so I cannot judge any of them as met:
++
++| Condition | Assessment |
++| :--- | :--- |
++| C1 | Cannot verify from this packet |
++| C2 | Cannot verify from this packet |
++| C3 | Cannot verify from this packet |
++| C4 | Cannot verify from this packet |
++| C5 | Cannot verify from this packet |
++| C6 | Cannot verify from this packet |
++
++F1 [blocker]: A clean `VERDICT: ACCEPT` review may correctly contain no findings or conditions, and the wrapper tests produce exactly that output. `record()` nevertheless fails every indexed artifact for which `labeled_items()` is empty. This blocks a normal pilot review.
++
++F2 [blocker]: `done()` accepts a `verified` quote that says the issue remains open. It also accepts a `user-decided` quote merely because its words occur somewhere in Decisions, without checking that it names the finding, accepts its outcome, or has the stated scope. These allow open obligations to close.
++
++F3 [blocker]: `carried <ID>` is unsound as implemented and conflicts with v6’s closure rule. A blocker can point to an unrelated closed minor finding, including one closed by `rejected:`, and then pass `done()`. There is no check that the target restates the same issue or that the eventual evidence resolves the original blocker. Permit carrying only with an explicit, reviewable mapping of the two items and closure evidence that satisfies the original item’s severity and identity.
++
++F4 [major]: `record()` does not require either a standards pin or a wrapper revision. It also silently overwrites duplicate review rounds and disposition IDs while parsing, and `report --write-baseline` exempts every existing `.collab/` file from discovery. These paths can conceal a missing row or unindexed review. Require unique IDs and rounds, require provenance for post-adoption artifacts, and enumerate legacy artifacts explicitly.
++
++F5 [major]: The ratchet checks T2’s total but not each existing T2 file. One file can grow while another shrinks and the total passes. The gateway `PROTOCOL.md` cap is not checked when `record` runs against the pilot repository; agent-memory checking is optional and a missing memory directory counts as empty. These leave stated budgets unenforced.
++
++F6 [major]: A matching `.sha256` proves only that the sidecar matches the current artifact. Editing both passes `record()`, including after commit; the checker does not enforce the protocol’s “never edit” rule. An empty checksum file instead raises an uncaught exception. Check committed artifact immutability and handle malformed sidecars as ordinary failures.
++
++F7 [major]: `transfer()` looks for the words `Inventory:`, `Runtime observation:`, and `Restart sequence:` anywhere in the last handoff block. The supplied test passes with `Inventory: none`, despite v6 requiring a command and untracked and ignored counts. It does not validate observation recency, needed-file locations, or legacy triage.
++
++F8 [minor]: Parsing depends on particular Markdown table headings and inline path syntax; duplicate entries are lost, while some valid local link forms are skipped. `record()` also does not revalidate labeled output, so an artifact and checksum edited together can introduce duplicate labels. These are manageable if the template syntax is made mandatory and malformed input fails explicitly.
++
++The implementation is **not ready for the single-session pilot**. The smallest gate is to fix the clean-ACCEPT failure; enforce identity and affirmative resolution for strict closures; remove the dirty-wrapper bypass from production behavior and fail on Git errors; make review, row, pin, and revision parsing fail closed; enforce the stated budget ratchets; and validate the required handoff fields. Add focused tests for those cases, then assess C1–C6 against their missing Round-5 text.
++
++ATTESTATION: all actionable findings and conditions are labeled.
++
++VERDICT: REJECT
+\ No newline at end of file
+diff --git a/.collab/codex-2026-10-03-workspace-framework-r06.md.sha256 b/.collab/codex-2026-10-03-workspace-framework-r06.md.sha256
+new file mode 100644
+index 0000000..9de1c72
+--- /dev/null
++++ b/.collab/codex-2026-10-03-workspace-framework-r06.md.sha256
+@@ -0,0 +1 @@
++91bc7afbad9038cd3534203e82a2e66de582bf8faa2fa46ba5b331bf9ddbb1de  .collab/codex-2026-10-03-workspace-framework-r06.md
+diff --git a/claude-review.sh b/claude-review.sh
+index a5ab188..665faab 100755
+--- a/claude-review.sh
++++ b/claude-review.sh
+@@ -21,10 +21,15 @@ stdout="$tmp/stdout.json"; stderr="$tmp/stderr"; combined="$tmp/prompt.txt"; deb
+ fail() { local code="$1" reason="$2"; if [[ ! -s "$diagnostic" ]]; then jq -n --arg owner "$owner" --arg requested "$requested_model" --arg selected "${model:-}" --arg reason "$reason" --arg code "$code" --arg elapsed "$((SECONDS-start))" --rawfile stdout "$stdout" --rawfile stderr "$stderr" '{provider:"claude",owner:$owner,requested_model:$requested,selected_model:$selected,reason:$reason,exit_code:($code|tonumber),elapsed_seconds:($elapsed|tonumber),stdout:$stdout,stderr:$stderr}' > "$tmp/diagnostic.json" && chmod 444 "$tmp/diagnostic.json" && mv -f "$tmp/diagnostic.json" "$diagnostic"; fi; print -u2 "$reason; diagnostics captured at $diagnostic"; exit "$code"; }
+ safe() { local f="$1" label="$2"; [[ -f "$f" && ! -L "$f" ]] || fail 66 "$label is not a regular file"; f="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"; if [[ -n "$packet_root" ]]; then local pr="$(cd "$packet_root" 2>/dev/null && pwd -P)" || fail 77 "invalid packet root"; case "$f" in "$root"/*|"$pr"/*) ;; *) fail 77 "$label is outside allowed roots";; esac; else case "$f" in "$root"/*) ;; *) fail 77 "$label must be inside repo or use --packet-root";; esac; fi; case "$f" in */.env|*/.env.*|*/.reviewers.env|*/data/*|*/exports/*|*/artifacts/private/*|*.pem|*.key) fail 77 "refusing private $label";; esac; REPLY="$f"; }
+ # Provenance (workspace framework v6 §7): record the gateway commit this wrapper
+-# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
+-# is for the provider-free tests only; it is recorded as "(dirty)".
+-wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
+-if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
++# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
++# copy outside any repository (consumer-shim fixtures) records "unversioned",
++# which docs-check rejects for reviews captured after adoption.
++wrapper_rev="unversioned"
++if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
++  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
++  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
++  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
++fi
+ command -v claude >/dev/null || fail 69 "claude CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ policy="${CLAUDE_REVIEW_MODEL_POLICY:-$(dirname "$0")/claude-model-policy.json}"
+ policy_active=false
+diff --git a/codex-review.sh b/codex-review.sh
+index 1fbdf9b..e41e5bc 100755
+--- a/codex-review.sh
++++ b/codex-review.sh
+@@ -20,10 +20,15 @@ stdout="$tmp/events.jsonl"; stderr="$tmp/stderr"; combined="$tmp/prompt.txt"; la
+ fail() { local code="$1" reason="$2"; if [[ ! -s "$diagnostic" ]]; then jq -n --arg owner "$owner" --arg requested "$requested_model" --arg selected "${model:-}" --arg reason "$reason" --arg code "$code" --arg elapsed "$((SECONDS-start))" --rawfile stdout "$stdout" --rawfile stderr "$stderr" '{provider:"codex",owner:$owner,requested_model:$requested,selected_model:$selected,reason:$reason,exit_code:($code|tonumber),elapsed_seconds:($elapsed|tonumber),stdout:$stdout,stderr:$stderr}' > "$tmp/diagnostic.json" && chmod 444 "$tmp/diagnostic.json" && mv -f "$tmp/diagnostic.json" "$diagnostic"; fi; print -u2 "$reason; diagnostics captured at $diagnostic"; exit "$code"; }
+ safe() { local f="$1" label="$2"; [[ -f "$f" && ! -L "$f" ]] || fail 66 "$label is not a regular file"; f="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"; if [[ -n "$packet_root" ]]; then local pr="$(cd "$packet_root" 2>/dev/null && pwd -P)" || fail 77 "invalid packet root"; case "$f" in "$root"/*|"$pr"/*) ;; *) fail 77 "$label is outside allowed roots";; esac; else case "$f" in "$root"/*) ;; *) fail 77 "$label must be inside repo or use --packet-root";; esac; fi; case "$f" in */.env|*/.env.*|*/.reviewers.env|*/data/*|*/exports/*|*/artifacts/private/*|*.pem|*.key) fail 77 "refusing private $label";; esac; REPLY="$f"; }
+ # Provenance (workspace framework v6 §7): record the gateway commit this wrapper
+-# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
+-# is for the provider-free tests only; it is recorded as "(dirty)".
+-wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
+-if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
++# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
++# copy outside any repository (consumer-shim fixtures) records "unversioned",
++# which docs-check rejects for reviews captured after adoption.
++wrapper_rev="unversioned"
++if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
++  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
++  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
++  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
++fi
+ command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ # Reviews run on the ChatGPT plan. An API key would switch Codex to billed
+ # API usage, so its presence is refused and the login method is checked.
+diff --git a/docs-check.py b/docs-check.py
+index f689979..39441ff 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -16,7 +16,7 @@ import json
+ import re
+ import subprocess
+ import sys
+-from datetime import date
++from datetime import date, datetime
+ from pathlib import Path
+ 
+ GATEWAY = Path(__file__).resolve().parent
+@@ -25,10 +25,13 @@ BUDGET = {"STATUS.md": 4000, "AGENTS.md": 12000, "PROTOCOL.md": 12000,
+           "CLAUDE.md:stub": 1500, "workstream": 30000, "T2": 60000,
+           "memory:index": 2000, "memory:entry": 1500, "memory:total": 15000}
+ REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Kimi review")
+-FINDING = re.compile(r"(?m)^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
+-CONDITION = re.compile(r"(?m)^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
++FINDING = re.compile(r"^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
++CONDITION = re.compile(r"^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
++OPEN_WORDS = re.compile(r"(?i)\b(remains?|still|open|partial(?:ly)?|unresolved|not (?:yet )?(?:resolved|satisfied|met|addressed)|cannot|unmet)\b")
++VALIDATOR = GATEWAY / "reviewer-validate.py"
+ ROW_ID = re.compile(r"^R(\d+)-([FC]\d+)$")
+ CLOSURE = "raw review compared with its rows; no unlabeled actionable item"
++MAX_OBSERVATION_AGE = 2 * 3600
+ 
+ 
+ def git(repo, *args):
+@@ -68,19 +71,30 @@ def is_review_artifact(path):
+ 
+ 
+ def labeled_items(path):
+-    """Return {ID: severity} for a review; conditions have severity 'condition'.
++    """Return ({ID: (severity, text)}, duplicate IDs) for a review.
+ 
+-    Labeled output (F<n> [severity]: / C<n>:) is parsed directly. A legacy review
+-    without labels is parsed from numbered items under Blocker/Major/Minor
+-    headings, numbered continuously as F<n>.
++    Conditions have severity 'condition'. Labeled output (F<n> [severity]: /
++    C<n>:) is parsed directly; a legacy review without labels is parsed from
++    numbered items under Blocker/Major/Minor headings, numbered as F<n>.
+     """
+     text = artifact_text(path)
+-    items = {f"F{m.group(1)}": m.group(2) for m in FINDING.finditer(text)}
+-    items.update({f"C{m.group(1)}": "condition" for m in CONDITION.finditer(text)})
++    items, dupes = {}, []
++    def put(key, sev, line):
++        if key in items:
++            dupes.append(key)
++        items[key] = (sev, line.strip())
++    lines = text.splitlines()
++    for line in lines:
++        m = FINDING.match(line)
++        if m:
++            put(f"F{m.group(1)}", m.group(2), line)
++        m = CONDITION.match(line)
++        if m:
++            put(f"C{m.group(1)}", "condition", line)
+     if items:
+-        return items
++        return items, dupes
+     severity = None
+-    for line in text.splitlines():
++    for line in lines:
+         heading = re.match(r"^#+\s*(.*)", line)
+         if heading:
+             h = heading.group(1).lower()
+@@ -89,8 +103,13 @@ def labeled_items(path):
+             continue
+         num = re.match(r"^(\d+)\.\s", line)
+         if num and severity:
+-            items[f"F{num.group(1)}"] = severity
+-    return items
++            put(f"F{num.group(1)}", severity, line)
++    return items, dupes
++
++
++def verdict(path):
++    m = re.findall(r"(?im)^\W*verdict\W*:\s*(accept with conditions|accept|reject)\b", artifact_text(path))
++    return m[-1].lower() if m else None
+ 
+ 
+ def wrapper_revision(path):
+@@ -120,17 +139,29 @@ class Workstream:
+                     self.header.setdefault(m.group(1), []).append(m.group(2))
+             else:
+                 self.sections[current].append(line)
+-        self.reviews = {}
++        self.reviews, self.rows, self.problems = {}, {}, []
+         for line in self.sections.get("Reviews", []):
+             c = cells(line) if line.startswith("|") else []
++            if not c or c[0] in ("Round", "") or set(c[0]) <= set(":- "):
++                continue
+             m = re.search(r"`([^`]*\.collab/[^`]+)`", line)
+-            if c and m and re.match(r"^r\d+", c[0]):
+-                self.reviews[int(re.match(r"^r(\d+)", c[0]).group(1))] = m.group(1)
+-        self.rows = {}
++            r = re.match(r"^r(\d+)", c[0])
++            if not (m and r):
++                self.problems.append(f"malformed review index row: {line.strip()[:80]}")
++                continue
++            if int(r.group(1)) in self.reviews:
++                self.problems.append(f"duplicate review round r{int(r.group(1)):02d}")
++            self.reviews[int(r.group(1))] = m.group(1)
+         for line in self.sections.get("Findings and conditions", []):
+             c = cells(line) if line.startswith("|") else []
+-            if c and ROW_ID.match(c[0]):
+-                self.rows[c[0]] = {"severity": c[1], "disposition": c[-2], "status": c[-1]}
++            if not c or c[0] in ("ID", "") or set(c[0]) <= set(":- "):
++                continue
++            if not ROW_ID.match(c[0]) or len(c) < 4:
++                self.problems.append(f"malformed findings row: {line.strip()[:80]}")
++                continue
++            if c[0] in self.rows:
++                self.problems.append(f"duplicate findings row {c[0]}")
++            self.rows[c[0]] = {"severity": c[1], "disposition": c[-2], "status": c[-1]}
+ 
+     def section(self, name):
+         return "\n".join(self.sections.get(name, []))
+@@ -193,10 +224,23 @@ def check_budgets(repo, errors):
+             t2 += chars
+         if cap is not None and chars > limit(cap, base.get("files", {}).get(rel)):
+             errors.append(f"budget: {rel} has {chars} characters (limit {limit(cap, base.get('files', {}).get(rel))})")
+-    if t2 > limit(BUDGET["T2"], base.get("tiers", {}).get("T2")):
+-        errors.append(f"budget: T2 knowledge totals {t2} characters (limit {limit(BUDGET['T2'], base.get('tiers', {}).get('T2'))})")
++    t2_base = base.get("tiers", {}).get("T2")
++    if t2 > limit(BUDGET["T2"], t2_base):
++        errors.append(f"budget: T2 knowledge totals {t2} characters (limit {limit(BUDGET['T2'], t2_base)})")
++    if t2_base is not None and t2_base > BUDGET["T2"]:
++        # Over-budget tier: no T2 file may grow or appear until compaction.
++        t2_files = base.get("t2_files", {})
++        for rel, (tier, chars, _) in files.items():
++            if tier == "T2" and chars > t2_files.get(rel, 0):
++                errors.append(f"budget: T2 file {rel} grew to {chars} characters while T2 is over budget (baseline {t2_files.get(rel, 0)})")
++    proto = GATEWAY / "PROTOCOL.md"
++    if repo != GATEWAY and proto.is_file() and len(proto.read_text()) > BUDGET["PROTOCOL.md"]:
++        errors.append(f"budget: gateway PROTOCOL.md exceeds {BUDGET['PROTOCOL.md']} characters")
+     mem = base.get("agent_cache")
+     if mem:
++        if not Path(mem["dir"]).is_dir():
++            errors.append(f"budget: agent cache directory {mem['dir']} is missing")
++            return
+         sizes, total = memory_sizes(mem["dir"])
+         if total > limit(BUDGET["memory:total"], mem.get("total")):
+             errors.append(f"budget: agent cache totals {total} characters (limit {limit(BUDGET['memory:total'], mem.get('total'))})")
+@@ -237,19 +281,35 @@ def record(repo):
+         name = wpath.relative_to(repo)
+         if not ws.header.get("Owner"):
+             errors.append(f"{name}: no Owner line")
++        errors.extend(f"{name}: {p}" for p in ws.problems)
+         for rnd, rel in sorted(ws.reviews.items()):
+             art = (repo / rel)
+             indexed.add(str(art.resolve()))
+             if not art.is_file():
+                 errors.append(f"{name}: r{rnd:02d} artifact {rel} does not exist")
+                 continue
++            arel = str(art.relative_to(repo))
+             side = art.with_name(art.name + ".sha256")
+-            if not side.is_file() or side.read_text().split()[0] != hashlib.sha256(art.read_bytes()).hexdigest():
+-                errors.append(f"{name}: r{rnd:02d} artifact {rel} checksum missing or mismatched")
+-            items = labeled_items(art)
+-            if not items:
+-                errors.append(f"{name}: r{rnd:02d} artifact {rel} has no labeled or legacy-numbered items")
+-            expect = {f"R{rnd:02d}-{i}": s for i, s in items.items()}
++            digest = side.read_text().split() if side.is_file() else []
++            if not digest or digest[0] != hashlib.sha256(art.read_bytes()).hexdigest():
++                errors.append(f"{name}: r{rnd:02d} artifact {rel} checksum missing, malformed, or mismatched")
++            for f in (art, side):
++                frel = str(f.relative_to(repo))
++                if git(repo, "ls-files", "--error-unmatch", frel)[0] == 0:
++                    if git(repo, "diff", "--quiet", "HEAD", "--", frel)[0] != 0:
++                        errors.append(f"{name}: {frel} has uncommitted changes (artifacts are never edited)")
++                    if git(repo, "log", "--format=%H", "--diff-filter=M", "--", frel)[1]:
++                        errors.append(f"{name}: {frel} was modified after its first commit")
++            items, dupes = labeled_items(art)
++            errors.extend(f"{name}: r{rnd:02d} has duplicate label {d}" for d in dupes)
++            post_adoption = arel not in legacy
++            if post_adoption:
++                v = subprocess.run([sys.executable, str(VALIDATOR)], input=artifact_text(art), capture_output=True, text=True)
++                if v.returncode != 0:
++                    errors.append(f"{name}: r{rnd:02d} fails the output contract: {v.stderr.strip()}")
++            if not items and verdict(art) != "accept":
++                errors.append(f"{name}: r{rnd:02d} artifact {rel} has no labeled items but its verdict requires them")
++            expect = {f"R{rnd:02d}-{i}": s for i, (s, _) in items.items()}
+             have = {k: v for k, v in ws.rows.items() if int(ROW_ID.match(k).group(1)) == rnd}
+             for rid in sorted(set(expect) - set(have)):
+                 errors.append(f"{name}: no disposition row for {rid} ({expect[rid]})")
+@@ -259,7 +319,9 @@ def record(repo):
+                 if have[rid]["severity"] != expect[rid]:
+                     errors.append(f"{name}: row {rid} severity {have[rid]['severity']!r} != review {expect[rid]!r}")
+             rev = wrapper_revision(art)
+-            if rev is not None and str(art.relative_to(repo)) not in legacy:
++            if post_adoption and rev is None:
++                errors.append(f"{name}: r{rnd:02d} has no wrapper revision (post-adoption reviews need provenance)")
++            if rev is not None and post_adoption:
+                 if rev == "unversioned" or rev.endswith("(dirty)"):
+                     errors.append(f"{name}: r{rnd:02d} captured from an unversioned or dirty wrapper ({rev})")
+                 elif pin:
+@@ -280,6 +342,8 @@ def record(repo):
+             errors.append(f".collab: {rel} is not a recognizable review artifact")
+         elif str(f.resolve()) not in indexed:
+             errors.append(f".collab: {rel} is not in any workstream review index")
++    if base and repo != GATEWAY and not pin:
++        errors.append("AGENTS.md has no 'Standards: reviewer-agent-gateway@<commit>' pin")
+     check_links(repo, errors)
+     check_budgets(repo, errors)
+     return errors
+@@ -298,44 +362,82 @@ def transfer(repo, wrel):
+     blocks = re.split(r"(?m)^### Handoff", ws.text)
+     if len(blocks) < 2:
+         errors.append(f"transfer: {wrel} has no '### Handoff' block")
+-    else:
+-        for field in ("Inventory:", "Runtime observation:", "Restart sequence:"):
+-            if field not in blocks[-1]:
+-                errors.append(f"transfer: latest handoff block lacks '{field}'")
++        return errors
++    block = blocks[-1]
++    inv = re.search(r"(?m)^Inventory: `([^`]+)`; (\d+) untracked, (\d+) ignored; needed by next owner: (.+)$", block)
++    if not inv:
++        errors.append("transfer: Inventory must read 'Inventory: `<command>`; <n> untracked, <n> ignored; needed by next owner: <paths> | none'")
++    elif inv.group(4).strip() != "none":
++        for path in [x.strip() for x in inv.group(4).split(",")]:
++            if git(repo, "ls-files", "--error-unmatch", path)[0] != 0:
++                errors.append(f"transfer: needed file {path} is not committed")
++    obs = re.search(r"(?m)^Runtime observation: (.+)$", block)
++    if not obs:
++        errors.append("transfer: latest handoff block lacks 'Runtime observation:'")
++    elif obs.group(1).strip() != "n/a (not operational)":
++        t = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", obs.group(1))
++        if not t:
++            errors.append("transfer: Runtime observation must start with 'YYYY-MM-DD HH:MM' or be 'n/a (not operational)'")
++        elif (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds() > MAX_OBSERVATION_AGE:
++            errors.append("transfer: Runtime observation is older than two hours; observe again immediately before handoff")
++    if not re.search(r"(?m)^Restart sequence: \S", block):
++        errors.append("transfer: latest handoff block lacks 'Restart sequence:'")
+     return errors
+ 
+ 
+-def disposition_errors(ws, rid, seen=()):
+-    row = ws.rows[rid]
++def item_text(ws, rid):
+     rnd, item = int(ROW_ID.match(rid).group(1)), ROW_ID.match(rid).group(2)
++    items, _ = labeled_items(ws.repo / ws.reviews[rnd])
++    return items.get(item, ("", ""))[1]
++
++
++def disposition_errors(ws, rid, seen=(), strict_from=None):
++    """Errors for one row. strict_from carries the original strict item through
++    a carried chain, so the chain's end must satisfy the original's severity."""
++    row = ws.rows[rid]
++    rnd = int(ROW_ID.match(rid).group(1))
+     sev, disp = row["severity"], row["disposition"]
+-    strict = sev in ("blocker", "condition")
++    strict = sev in ("blocker", "condition") or strict_from is not None
+     m = re.match(r'^verified r(\d+) "(.+)"$', disp)
+     if m:
+-        later = int(m.group(1))
++        later, quote = int(m.group(1)), m.group(2)
+         if later <= rnd or later not in ws.reviews:
+             return [f"{rid}: verified cites r{later:02d}, which is not a later indexed round"]
+-        if norm(m.group(2)) not in norm(artifact_text(ws.repo / ws.reviews[later])):
++        if norm(quote) not in norm(artifact_text(ws.repo / ws.reviews[later])):
+             return [f"{rid}: verified quote does not occur in r{later:02d}"]
++        if rid not in quote or OPEN_WORDS.search(quote):
++            return [f"{rid}: verified quote must name {rid} and affirm resolution without open-status words"]
+         return []
+     m = re.match(r'^user-decided (\d{4}-\d{2}-\d{2}) "(.+)"$', disp)
+     if m:
+         if norm(m.group(2)) not in norm(ws.section("Decisions")):
+             return [f"{rid}: user-decided quote does not occur in the Decisions section"]
++        if rid not in m.group(2):
++            return [f"{rid}: user-decided quote must name {rid}"]
+         return []
+     m = re.match(r"^carried (R\d+-[FC]\d+)$", disp)
+     if m:
+         target = m.group(1)
+-        # A condition may restate a finding of the same round; a finding may be
+-        # carried into a later round's re-raised finding. Never backwards.
+         if target == rid or target not in ws.rows or int(ROW_ID.match(target).group(1)) < rnd:
+             return [f"{rid}: carried target {target} is not this or a later round's row"]
+         if target in seen:
+             return [f"{rid}: carried chain loops"]
+-        sub = disposition_errors(ws, target, seen + (rid,))
++        # Explicit mapping, checked in the reviewer's own words: within a round
++        # the restating item cites the target's short ID ("C1: ... under F1");
++        # across rounds the re-raised target cites this item's full ID
++        # ("R01-F1 is partially resolved").
++        if int(ROW_ID.match(target).group(1)) == rnd:
++            cite, where, text = ROW_ID.match(target).group(2), rid, item_text(ws, rid)
++        else:
++            cite, where, text = rid, target, item_text(ws, target)
++        if not re.search(rf"\b{re.escape(cite)}\b", text):
++            return [f"{rid}: carried requires {where}'s review text to cite {cite}"]
++        origin = strict_from or (rid if sev in ("blocker", "condition") else None)
++        sub = disposition_errors(ws, target, seen + (rid,), origin)
+         return [f"{rid}: carried target is not closed ({e})" for e in sub]
+     if strict:
+-        return [f"{rid}: a {sev} closes only by verified, user-decided, or carried (got {disp!r})"]
++        label = f"{sev} (carried from {strict_from})" if strict_from else sev
++        return [f"{rid}: a {label} closes only by verified, user-decided, or carried (got {disp!r})"]
+     m = re.match(r"^fixed ([0-9a-f]{7,40})$", disp)
+     if m:
+         if git(ws.repo, "cat-file", "-e", m.group(1) + "^{commit}")[0] != 0:
+@@ -383,12 +485,15 @@ def report(repo, write=False, lower=False, memory=None):
+     if write:
+         if path.exists():
+             raise SystemExit(f"{BASELINE} exists; baselines are never raised (use --lower)")
+-        collab = repo / ".collab"
++        code, untracked = git(repo, "ls-files", "--others", "--exclude-standard", "--", ".collab")
++        if code != 0 or untracked:
++            raise SystemExit("refusing baseline: .collab has untracked files (or Git failed); commit or index them first")
++        _, tracked = git(repo, "ls-files", "--", ".collab")
+         base = {"created": date.today().isoformat(),
+                 "files": {r: c for r, (_, c, cap) in files.items() if cap and c > cap},
+                 "tiers": {"T2": totals.get("T2", 0)},
+-                "legacy_collab": sorted(str(p.relative_to(repo)) for p in collab.iterdir()
+-                                        if p.is_file()) if collab.is_dir() else []}
++                "t2_files": {r: c for r, (t, c, _) in files.items() if t == "T2"},
++                "legacy_collab": sorted(tracked.splitlines())}
+         if mem:
+             base["agent_cache"] = mem
+         path.write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
+@@ -400,6 +505,8 @@ def report(repo, write=False, lower=False, memory=None):
+                 base["files"][rel] = min(base["files"][rel], files[rel][1])
+         if "T2" in base.get("tiers", {}):
+             base["tiers"]["T2"] = min(base["tiers"]["T2"], totals.get("T2", 0))
++        for rel in list(base.get("t2_files", {})):
++            base["t2_files"][rel] = min(base["t2_files"][rel], files[rel][1]) if rel in files else 0
+         if mem and "agent_cache" in base:
+             old = base["agent_cache"]
+             old["total"] = min(old["total"], mem["total"])
+@@ -409,7 +516,8 @@ def report(repo, write=False, lower=False, memory=None):
+ 
+ 
+ def dispositions(artifact, rnd):
+-    for item, sev in sorted(labeled_items(Path(artifact)).items(), key=lambda x: (x[0][0] != "F", int(x[0][1:]))):
++    items, _ = labeled_items(Path(artifact))
++    for item, (sev, _) in sorted(items.items(), key=lambda x: (x[0][0] != "F", int(x[0][1:]))):
+         print(f"| R{int(rnd):02d}-{item} | {sev} | | open |")
+ 
+ 
+diff --git a/gemini-review.sh b/gemini-review.sh
+index e600cd2..9ff85b0 100755
+--- a/gemini-review.sh
++++ b/gemini-review.sh
+@@ -19,10 +19,15 @@ response="$tmp/stream.jsonl"; stderr="$tmp/stderr"; hook_log="$tmp/hook.log"; di
+ fail() { local code="$1" reason="$2"; if [[ ! -s "$diagnostic" ]]; then jq -n --arg owner "$owner" --arg requested "$requested_model" --arg selected "${selected_model:-}" --arg reason "$reason" --arg code "$code" --arg elapsed "$((SECONDS-start))" --rawfile stdout "$response" --rawfile stderr "$stderr" '{provider:"gemini",cli:"agy",owner:$owner,requested_model:$requested,preflight_selected_model:$selected,reason:$reason,exit_code:($code|tonumber),elapsed_seconds:($elapsed|tonumber),stdout:$stdout,stderr:$stderr}' > "$tmp/diagnostic.json" && chmod 444 "$tmp/diagnostic.json" && mv -f "$tmp/diagnostic.json" "$diagnostic"; fi; print -u2 "$reason; diagnostics captured at $diagnostic"; exit "$code"; }
+ safe() { local f="$1" label="$2"; [[ -f "$f" && ! -L "$f" ]] || fail 66 "$label is not a regular file"; f="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"; if [[ -n "$packet_root" ]]; then local pr="$(cd "$packet_root" 2>/dev/null && pwd -P)"; case "$f" in "$root"/*|"$pr"/*) ;; *) fail 77 "$label is outside allowed roots";; esac; else case "$f" in "$root"/*) ;; *) fail 77 "$label must be inside repo or use --packet-root";; esac; fi; case "$f" in */.env|*/.env.*|*/.reviewers.env|*/data/*|*/exports/*|*/artifacts/private/*|*.pem|*.key) fail 77 "refusing private $label";; esac; REPLY="$f"; }
+ # Provenance (workspace framework v6 §7): record the gateway commit this wrapper
+-# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
+-# is for the provider-free tests only; it is recorded as "(dirty)".
+-wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
+-if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
++# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
++# copy outside any repository (consumer-shim fixtures) records "unversioned",
++# which docs-check rejects for reviews captured after adoption.
++wrapper_rev="unversioned"
++if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
++  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
++  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
++  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
++fi
+ command -v agy >/dev/null || fail 69 "agy (Antigravity CLI) not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ # Reviews run on the signed-in Google account's plan quota. An API key would
+ # switch agy to billed Gemini API calls, so its presence is refused.
+diff --git a/kimi-review.sh b/kimi-review.sh
+index 0d5c42b..b6c735d 100755
+--- a/kimi-review.sh
++++ b/kimi-review.sh
+@@ -52,10 +52,15 @@ safe() {
+   REPLY="$f"
+ }
+ # Provenance (workspace framework v6 §7): record the gateway commit this wrapper
+-# ran from and refuse uncommitted wrapper changes. REVIEWER_ALLOW_DIRTY_WRAPPER
+-# is for the provider-free tests only; it is recorded as "(dirty)".
+-wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || print unversioned)"
+-if [[ "$wrapper_rev" != unversioned && -n "$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" ]]; then [[ -n "${REVIEWER_ALLOW_DIRTY_WRAPPER:-}" ]] || fail 78 "gateway wrapper files have uncommitted changes"; wrapper_rev+=" (dirty)"; fi
++# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
++# copy outside any repository (consumer-shim fixtures) records "unversioned",
++# which docs-check rejects for reviews captured after adoption.
++wrapper_rev="unversioned"
++if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
++  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
++  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
++  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
++fi
+ 
+ command -v ollama >/dev/null || fail 69 "Ollama CLI not found"
+ command -v jq >/dev/null || fail 69 "jq is required"
+diff --git a/templates/workstream.md b/templates/workstream.md
+index 6c9fc70..433b94a 100644
+--- a/templates/workstream.md
++++ b/templates/workstream.md
+@@ -23,8 +23,12 @@ Links: <experiment, issue, or document links>
+ ## Findings and conditions
+ 
+ <!-- One row per labeled item; generate with: docs-check.py dispositions <artifact> <round>.
+-     Blocker/condition: verified rNN "<quote affirming resolution>" | user-decided <date> "<quote>" | carried RNN-Xn
+-     Major/minor: the above, fixed <pushed commit>, or rejected: <scoped decision or changed fact> -->
++     Blocker/condition: verified rNN "<later review's words naming this ID and affirming resolution>"
++       | user-decided <date> "<user's words in Decisions, naming this ID>"
++       | carried RNN-Xn (same round: this item's text cites Xn; later round: that item's text cites this ID;
++         the chain must end in evidence valid for this item's severity)
++     Major/minor: any of the above, fixed <commit in pushed history>,
++       or rejected: <the scoped decision or changed fact that makes it inapplicable> -->
+ 
+ | ID | Severity | Disposition | Status |
+ | :--- | :--- | :--- | :--- |
+@@ -40,7 +44,7 @@ Links: <experiment, issue, or document links>
+ Current state: <one paragraph>
+ Decisions: <links to Decisions entries in force>
+ Open obligations: <row IDs still open, with state>
+-Inventory: <command run>; <n> untracked, <n> ignored; needed by next owner: <paths committed at …> | none
+-Runtime observation: <time, commands, result> | n/a (not operational)
++Inventory: `git status --short --ignored`; <n> untracked, <n> ignored; needed by next owner: <committed paths, comma-separated> | none
++Runtime observation: <YYYY-MM-DD HH:MM, within two hours> <commands and result> | n/a (not operational)
+ Restart sequence: <numbered steps>
+ -->
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index 950586a..9d4a83d 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -7,19 +7,23 @@ import subprocess
+ import sys
+ import tempfile
+ import unittest
++from datetime import datetime, timedelta
+ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ TOOL = ROOT / "docs-check.py"
+ A = "ATTESTATION: all actionable findings and conditions are labeled."
++PAD = "The packet was read in full and each claim was checked against the stated invariants. " * 6
+ REVIEW1 = f"""# Codex review
+ 
+ Owner: claude
+ Wrapper revision: {{rev}}
+ 
++{PAD}
+ F1 [blocker]: the handoff loses work.
+ F2 [major]: budgets drift.
+-C1: fix the handoff.
++F3 [minor]: wording is loose.
++C1: fix the handoff under F1.
+ {A}
+ 
+ VERDICT: REJECT
+@@ -29,7 +33,19 @@ REVIEW2 = f"""# Codex review
+ Owner: claude
+ Wrapper revision: {{rev}}
+ 
++{PAD}
+ F1 [minor]: R01-F1 is resolved: the handoff now commits pending work.
++F2 [major]: R01-F2 remains open: budgets still drift.
++{A}
++
++VERDICT: REJECT
++"""
++CLEAN_ACCEPT = f"""# Codex review
++
++Owner: claude
++Wrapper revision: {{rev}}
++
++{PAD}
+ {A}
+ 
+ VERDICT: ACCEPT
+@@ -48,18 +64,20 @@ VERDICT: REJECT
+ """
+ 
+ 
+-def run(*args, cwd=None):
+-    r = subprocess.run([sys.executable, str(TOOL), *map(str, args)], capture_output=True, text=True, cwd=cwd)
++def run(*args):
++    r = subprocess.run([sys.executable, str(TOOL), *map(str, args)], capture_output=True, text=True)
+     return r.returncode, r.stdout + r.stderr
+ 
+ 
+ def git(repo, *args):
+-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
++    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],
++                   check=True, capture_output=True)
+ 
+ 
+ class Fixture:
+     def __init__(self, base):
+-        self.repo = Path(base) / "repo"
++        self.base = Path(base)
++        self.repo = self.base / "repo"
+         (self.repo / ".collab").mkdir(parents=True)
+         (self.repo / "workstreams").mkdir()
+         self.rev = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+@@ -73,10 +91,10 @@ class Fixture:
+         return p
+ 
+     def workstream(self, rows, reviews=None, decisions="", log="", extra=""):
+-        reviews = reviews or [("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "ACCEPT")]
++        reviews = reviews or [("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "REJECT")]
+         idx = "".join(f"| {r} | Codex | hard | `.collab/{p}` | {v} |\n" for r, p, v in reviews)
+         table = "".join(f"| {i} | {s} | {d} | {st} |\n" for i, s, d, st in rows)
+-        text = f"""# X
++        (self.repo / "workstreams" / "x.md").write_text(f"""# X
+ 
+ Workstream: x
+ Owner: Claude (2026-10-03)
+@@ -99,15 +117,22 @@ Status: active
+ ## Log
+ 
+ {log}
+-{extra}"""
+-        (self.repo / "workstreams" / "x.md").write_text(text)
++{extra}""")
++
++    def adopt(self):
++        (self.repo / "AGENTS.md").write_text(f"# Agents\n\nStandards: reviewer-agent-gateway@{self.rev}\n")
++        git(self.repo, "init", "-q", "-b", "main")
++        git(self.repo, "add", "-A")
++        git(self.repo, "commit", "-q", "-m", "x")
+ 
+ 
+ GOOD_ROWS = [
+     ("R01-F1", "blocker", 'verified r02 "R01-F1 is resolved: the handoff now commits pending work."', "closed"),
+-    ("R01-F2", "major", "rejected: outside the agreed pilot scope per the scope decision", "closed"),
++    ("R01-F2", "major", "carried R02-F2", "closed"),
++    ("R01-F3", "minor", "rejected: superseded by the scope decision recorded on 2026-10-03", "closed"),
+     ("R01-C1", "condition", "carried R01-F1", "closed"),
+-    ("R02-F1", "minor", "rejected: informational confirmation, nothing left to act on", "closed"),
++    ("R02-F1", "minor", "rejected: informational confirmation that R01-F1 closed; nothing to act on", "closed"),
++    ("R02-F2", "major", "rejected: budgets are out of scope per the scope decision of 2026-10-03", "closed"),
+ ]
+ CLOSURE_LOG = ("- r01: raw review compared with its rows; no unlabeled actionable item\n"
+                "- r02: raw review compared with its rows; no unlabeled actionable item\n")
+@@ -123,28 +148,53 @@ class DocsCheckTest(unittest.TestCase):
+     def tearDown(self):
+         self.tmp.cleanup()
+ 
++    def done_out(self):
++        return run("done", self.f.repo, "workstreams/x.md")
++
+     def test_record_and_done_pass(self):
+         self.f.workstream(GOOD_ROWS, log=CLOSURE_LOG)
+-        self.assertEqual(run("record", self.f.repo)[0], 0, run("record", self.f.repo)[1])
+-        code, out = run("done", self.f.repo, "workstreams/x.md")
++        code, out = run("record", self.f.repo)
++        self.assertEqual(code, 0, out)
++        code, out = self.done_out()
+         self.assertEqual(code, 0, out)
+ 
+-    def test_missing_extra_and_wrong_severity_rows(self):
+-        rows = [r for r in GOOD_ROWS if r[0] != "R01-C1"] + [("R01-F9", "minor", "x", "open")]
++    def test_clean_accept_without_items_passes_record(self):
++        self.f.artifact("codex-x-r03.md", CLEAN_ACCEPT)
++        self.f.workstream(GOOD_ROWS, reviews=[("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "REJECT"),
++                                              ("r03", "codex-x-r03.md", "ACCEPT")])
++        code, out = run("record", self.f.repo)
++        self.assertEqual(code, 0, out)
++
++    def test_missing_extra_duplicate_malformed_and_wrong_severity_rows(self):
++        rows = [r for r in GOOD_ROWS if r[0] != "R01-C1"] + [("R01-F9", "minor", "x", "open"), ("R02-F1", "minor", "x", "open")]
+         rows = [("R01-F2", "minor", r[2], r[3]) if r[0] == "R01-F2" else r for r in rows]
+-        self.f.workstream(rows)
++        self.f.workstream(rows, extra="")
++        ws = self.f.repo / "workstreams" / "x.md"
++        ws.write_text(ws.read_text().replace("| R01-F9 |", "| RX-9 | minor | x | open |\n| R01-F9 |"))
+         code, out = run("record", self.f.repo)
+         self.assertEqual(code, 1)
+-        self.assertIn("no disposition row for R01-C1", out)
+-        self.assertIn("row R01-F9 matches no item", out)
+-        self.assertIn("R01-F2 severity", out)
++        for expected in ("no disposition row for R01-C1", "row R01-F9 matches no item", "R01-F2 severity",
++                         "duplicate findings row R02-F1", "malformed findings row"):
++            self.assertIn(expected, out)
+ 
+-    def test_checksum_mismatch(self):
++    def test_checksum_mismatch_and_malformed_sidecar(self):
+         self.f.workstream(GOOD_ROWS)
+         (self.f.repo / ".collab" / "codex-x-r01.md").write_text(REVIEW1.replace("{rev}", self.f.rev) + "tampered\n")
+-        self.assertIn("checksum missing or mismatched", run("record", self.f.repo)[1])
++        (self.f.repo / ".collab" / "codex-x-r02.md.sha256").write_text("")
++        out = run("record", self.f.repo)[1]
++        self.assertIn("r01 artifact .collab/codex-x-r01.md checksum missing, malformed, or mismatched", out)
++        self.assertIn("r02 artifact .collab/codex-x-r02.md checksum missing, malformed, or mismatched", out)
++
++    def test_committed_artifact_edit_is_detected(self):
++        self.f.workstream(GOOD_ROWS)
++        self.f.adopt()
++        self.f.artifact("codex-x-r01.md", REVIEW1 + "\nedited later\n")
++        out = run("record", self.f.repo)[1]
++        self.assertIn("codex-x-r01.md has uncommitted changes", out)
++        git(self.f.repo, "commit", "-q", "-am", "edit")
++        self.assertIn("codex-x-r01.md was modified after its first commit", run("record", self.f.repo)[1])
+ 
+-    def test_unindexed_and_ambiguous_collab_files(self):
++    def test_unindexed_and_ambiguous_collab_files_and_pin(self):
+         self.f.workstream(GOOD_ROWS)
+         self.f.artifact("codex-x-r03.md", REVIEW2)
+         (self.f.repo / ".collab" / "notes.md").write_text("# notes\n")
+@@ -153,66 +203,108 @@ class DocsCheckTest(unittest.TestCase):
+         self.assertIn("notes.md is not a recognizable review artifact", out)
+         (self.f.repo / "docs-baseline.json").write_text(json.dumps(
+             {"legacy_collab": [".collab/codex-x-r03.md", ".collab/notes.md"]}))
+-        self.assertEqual(run("record", self.f.repo)[0], 0)
++        self.assertIn("has no 'Standards: reviewer-agent-gateway@<commit>' pin", run("record", self.f.repo)[1])
++        (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{self.f.rev}\n")
++        code, out = run("record", self.f.repo)
++        self.assertEqual(code, 0, out)
++
++    def test_baseline_refuses_untracked_collab(self):
++        self.f.workstream(GOOD_ROWS)
++        self.f.adopt()
++        self.f.artifact("codex-x-r09.md", REVIEW2)
++        self.assertNotEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
+ 
+     def test_legacy_numbered_review(self):
+         self.f.artifact("codex-x-r01.md", LEGACY)
++        (self.f.repo / "docs-baseline.json").write_text(json.dumps({"legacy_collab": [".collab/codex-x-r01.md"]}))
++        (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{self.f.rev}\n")
+         self.f.workstream([("R01-F1", "blocker", "x", "open"), ("R01-F2", "major", "x", "open"),
+-                           ("R02-F1", "minor", "x", "open")])
++                           ("R02-F1", "minor", "x", "open"), ("R02-F2", "major", "x", "open")])
+         code, out = run("record", self.f.repo)
+         self.assertEqual(code, 0, out)
+ 
+-    def test_dirty_wrapper_revision_fails_record(self):
++    def test_provenance_and_contract_for_post_adoption_reviews(self):
+         self.f.artifact("codex-x-r02.md", REVIEW2.replace("{rev}", "{rev} (dirty)"))
+         self.f.workstream(GOOD_ROWS)
+         self.assertIn("unversioned or dirty wrapper", run("record", self.f.repo)[1])
++        self.f.artifact("codex-x-r02.md", REVIEW2.replace("Wrapper revision: {rev}\n", "").replace(A, ""))
++        out = run("record", self.f.repo)[1]
++        self.assertIn("r02 has no wrapper revision", out)
++        self.assertIn("r02 fails the output contract", out)
+ 
+-    def test_done_rules(self):
++    def test_done_rejects_weak_closures(self):
+         bad = [
+             ("R01-F1", "blocker", 'verified r02 "this sentence is not in the review"', "closed"),
+-            ("R01-F2", "major", "rejected: too costly", "closed"),
++            ("R01-F2", "major", 'verified r02 "R01-F2 remains open: budgets still drift."', "closed"),
++            ("R01-F3", "minor", "rejected: too costly", "closed"),
+             ("R01-C1", "condition", "fixed abc1234", "closed"),
+-            ("R02-F1", "minor", "rejected: informational confirmation, nothing left to act on", "open"),
++            ("R02-F1", "minor", "rejected: informational confirmation that R01-F1 closed; nothing to act on", "open"),
++            ("R02-F2", "major", 'user-decided 2026-10-03 "accept drift for the pilot"', "closed"),
+         ]
+-        self.f.workstream(bad)
+-        out = run("done", self.f.repo, "workstreams/x.md")[1]
++        self.f.workstream(bad, decisions='- 2026-10-03, user: "accept drift for the pilot"')
++        out = self.done_out()[1]
+         self.assertIn("R01-F1: verified quote does not occur in r02", out)
+-        self.assertIn("R01-F2: no valid final disposition", out)
++        self.assertIn("R01-F2: verified quote must name R01-F2 and affirm resolution", out)
++        self.assertIn("R01-F3: no valid final disposition", out)
+         self.assertIn("R01-C1: a condition closes only by", out)
+         self.assertIn("R02-F1: status is 'open'", out)
++        self.assertIn("R02-F2: user-decided quote must name R02-F2", out)
+         self.assertIn("closure: log lacks 'r01:", out)
+ 
+-    def test_carried_to_open_target_fails_and_user_decided_quote(self):
+-        rows = [r for r in GOOD_ROWS]
+-        rows[0] = ("R01-F1", "blocker", 'user-decided 2026-10-03 "accept the handoff risk for the pilot"', "closed")
+-        rows[2] = ("R01-C1", "condition", "carried R02-F1", "closed")
+-        rows[3] = ("R02-F1", "minor", "open", "open")
+-        self.f.workstream(rows, decisions='- 2026-10-03, user: "accept the handoff risk for the pilot"', log=CLOSURE_LOG)
+-        out = run("done", self.f.repo, "workstreams/x.md")[1]
+-        self.assertNotIn("R01-F1:", out)
+-        self.assertIn("R01-C1: carried target is not closed", out)
+-
+-    def test_budgets_and_ratchet(self):
++    def test_carried_rules(self):
++        rows = list(GOOD_ROWS)
++        # Blocker carried into an unrelated finding that does not cite it.
++        rows[0] = ("R01-F1", "blocker", "carried R02-F2", "closed")
++        # Condition carried to a same-round finding it does not cite.
++        rows[3] = ("R01-C1", "condition", "carried R01-F2", "closed")
++        self.f.workstream(rows, log=CLOSURE_LOG)
++        out = self.done_out()[1]
++        self.assertIn("R01-F1: carried requires R02-F2's review text to cite R01-F1", out)
++        self.assertIn("R01-C1: carried requires R01-C1's review text to cite F2", out)
++        # A blocker carried into a cited minor must still close by strict evidence.
++        rows = list(GOOD_ROWS)
++        rows[0] = ("R01-F1", "blocker", "carried R02-F1", "closed")
++        self.f.workstream(rows, log=CLOSURE_LOG)
++        self.assertIn("R01-F1: carried target is not closed (R02-F1: a minor (carried from R01-F1) closes only by",
++                      self.done_out()[1])
++
++    def test_user_decided_names_finding(self):
++        rows = list(GOOD_ROWS)
++        rows[0] = ("R01-F1", "blocker", 'user-decided 2026-10-03 "R01-F1: accept the handoff risk for the pilot"', "closed")
++        self.f.workstream(rows, decisions='- 2026-10-03, user: "R01-F1: accept the handoff risk for the pilot"', log=CLOSURE_LOG)
++        code, out = self.done_out()
++        self.assertEqual(code, 0, out)
++
++    def test_budgets_and_ratchets(self):
+         self.f.workstream(GOOD_ROWS)
+         (self.f.repo / "STATUS.md").write_text("x" * 4001)
+         self.assertIn("STATUS.md has 4001 characters", run("record", self.f.repo)[1])
+         (self.f.repo / "STATUS.md").write_text("x" * 100)
+-        (self.f.repo / "AGENTS.md").write_text("y" * 13000)
+-        self.assertIn("AGENTS.md has 13000", run("record", self.f.repo)[1])
++        (self.f.repo / "CLAUDE.md").write_text("z" * 61000)
++        self.f.adopt()
++        (self.f.repo / "AGENTS.md").write_text(f"Standards: reviewer-agent-gateway@{self.f.rev}\n" + "y" * 13000)
++        git(self.f.repo, "commit", "-q", "-am", "big")
++        self.assertIn("AGENTS.md has", run("record", self.f.repo)[1])
+         self.assertEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
+-        self.assertEqual(run("record", self.f.repo)[0], 0)
++        code, out = run("record", self.f.repo)
++        self.assertEqual(code, 0, out)
+         self.assertNotEqual(run("report", self.f.repo, "--write-baseline")[0], 0)
+-        (self.f.repo / "AGENTS.md").write_text("y" * 13001)
+-        self.assertIn("limit 13000", run("record", self.f.repo)[1])
+-        (self.f.repo / "AGENTS.md").write_text("y" * 12500)
++        size = len((self.f.repo / "AGENTS.md").read_text())
++        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text() + "y")
++        self.assertIn(f"limit {size}", run("record", self.f.repo)[1])
++        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text()[:12500])
+         run("report", self.f.repo, "--lower")
+         self.assertEqual(json.loads((self.f.repo / "docs-baseline.json").read_text())["files"]["AGENTS.md"], 12500)
+-        (self.f.repo / "AGENTS.md").write_text("y" * 12600)
++        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text() + "y" * 50)
+         run("report", self.f.repo, "--lower")
+         self.assertEqual(json.loads((self.f.repo / "docs-baseline.json").read_text())["files"]["AGENTS.md"], 12500)
++        (self.f.repo / "AGENTS.md").write_text((self.f.repo / "AGENTS.md").read_text()[:12500])
++        # T2 over budget: shrinking one file does not let another grow.
+         (self.f.repo / "docs").mkdir()
+-        (self.f.repo / "docs" / "a.md").write_text("z" * 60001)
+-        self.assertIn("T2 knowledge totals 60001", run("record", self.f.repo)[1])
++        (self.f.repo / "docs" / "a.md").write_text("q" * 10)
++        (self.f.repo / "CLAUDE.md").write_text("z" * 60000)
++        out = run("record", self.f.repo)[1]
++        self.assertIn("T2 file docs/a.md grew to 10 characters while T2 is over budget", out)
+ 
+     def test_broken_link(self):
+         self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
+@@ -220,23 +312,32 @@ class DocsCheckTest(unittest.TestCase):
+ 
+     def test_transfer(self):
+         self.f.workstream(GOOD_ROWS)
+-        remote = Path(self.tmp.name) / "remote.git"
++        self.f.adopt()
++        remote = self.f.base / "remote.git"
+         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+-        git(self.f.repo, "init", "-q", "-b", "main")
+-        git(self.f.repo, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+-        git(self.f.repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x")
+         out = run("transfer", self.f.repo, "workstreams/x.md")[1]
+         self.assertIn("not equal to its pushed upstream", out)
+         self.assertIn("no '### Handoff' block", out)
+         git(self.f.repo, "remote", "add", "origin", str(remote))
+         git(self.f.repo, "push", "-q", "-u", "origin", "main")
+         ws = self.f.repo / "workstreams" / "x.md"
+-        ws.write_text(ws.read_text() + "\n### Handoff 2026-10-03\n\nInventory: none\n")
++        stale = (datetime.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M")
++        ws.write_text(ws.read_text() + f"\n### Handoff 2026-10-03\n\nInventory: none\nRuntime observation: {stale} deploy ok\n")
+         out = run("transfer", self.f.repo, "workstreams/x.md")[1]
+         self.assertIn("uncommitted tracked changes", out)
+-        self.assertIn("lacks 'Runtime observation:'", out)
+-        ws.write_text(ws.read_text() + "Runtime observation: n/a (not operational)\nRestart sequence: read this file\n")
+-        git(self.f.repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-am", "handoff")
++        self.assertIn("Inventory must read", out)
++        self.assertIn("older than two hours", out)
++        self.assertIn("lacks 'Restart sequence:'", out)
++        now = datetime.now().strftime("%Y-%m-%d %H:%M")
++        base_text = ws.read_text().split("### Handoff")[0]
++        ws.write_text(base_text + "### Handoff 2026-10-03\n\n"
++                      "Inventory: `git status --short --ignored`; 1 untracked, 3 ignored; needed by next owner: notes/missing.md\n"
++                      f"Runtime observation: {now} health endpoint 200\nRestart sequence: read this file\n")
++        git(self.f.repo, "commit", "-q", "-am", "handoff")
++        git(self.f.repo, "push", "-q")
++        self.assertIn("needed file notes/missing.md is not committed", run("transfer", self.f.repo, "workstreams/x.md")[1])
++        ws.write_text(ws.read_text().replace("needed by next owner: notes/missing.md", "needed by next owner: none"))
++        git(self.f.repo, "commit", "-q", "-am", "handoff2")
+         git(self.f.repo, "push", "-q")
+         code, out = run("transfer", self.f.repo, "workstreams/x.md")
+         self.assertEqual(code, 0, out)
+@@ -245,7 +346,7 @@ class DocsCheckTest(unittest.TestCase):
+         code, out = run("dispositions", self.f.repo / ".collab" / "codex-x-r01.md", "r01")
+         self.assertEqual(code, 0)
+         self.assertEqual(out.splitlines(), ["| R01-F1 | blocker | | open |", "| R01-F2 | major | | open |",
+-                                            "| R01-C1 | condition | | open |"])
++                                            "| R01-F3 | minor | | open |", "| R01-C1 | condition | | open |"])
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index cff78c5..fa3e203 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -1,17 +1,20 @@
+ #!/bin/zsh
+ set -euo pipefail
+ 
+-root="$(cd "$(dirname "$0")/.." && pwd -P)"
++source_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+ test_root="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-test.XXXXXX")"
+ trap 'rm -rf "$test_root"' EXIT INT TERM
++# Wrappers refuse uncommitted changes, so run them from a committed snapshot
++# of the working tree rather than through a bypass.
++root="$test_root/gateway"; mkdir -p "$root"
++cp -p "$source_root"/*.sh "$source_root"/*.py "$source_root"/*.json "$source_root"/output-contract.txt "$root"/
++git -C "$root" init -q && git -C "$root" add -A && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m snapshot
+ mkdir -p "$test_root/.collab" "$test_root/packet" "$test_root/shared" "$test_root/bin"
+ print 'Review prompt.' > "$test_root/prompt.md"
+ print 'Safe packet fixture.' > "$test_root/packet/source.md"
+ print 'Shared review prompt.' > "$test_root/shared/prompt.md"
+ print 'Shared packet fixture.' > "$test_root/shared/packet.md"
+ unset GEMINI_API_KEY GOOGLE_API_KEY
+-# Development runs use the working copy; wrappers record it as "(dirty)".
+-export REVIEWER_ALLOW_DIRTY_WRAPPER=1
+ 
+ cat > "$test_root/bin/claude" <<'EOF'
+ #!/bin/zsh
+@@ -279,7 +282,7 @@ for line in 'Owner: claude' 'Selected model: gpt-6-sol' 'Reasoning effort: high'
+   grep -Fx -- "$line" "$test_root/.collab/codex-hard.md" >/dev/null || { print -u2 "codex-hard.md missing: $line"; exit 1; }
+ done
+ [[ -s "$test_root/.collab/codex-hard.md.sha256" ]]
+-grep -E '^Wrapper revision: [0-9a-f]{40}( \(dirty\))?$' "$test_root/.collab/codex-hard.md" >/dev/null
++grep -E '^Wrapper revision: [0-9a-f]{40}$' "$test_root/.collab/codex-hard.md" >/dev/null
+ jq -e '.reviewer_metadata.wrapper_revision | test("^[0-9a-f]{40}")' "$test_root/.collab/gemini-hard.json" >/dev/null
+ codex_review routine codex-routine.md env CODEX_TEST_MODE=success >/dev/null
+ grep -F -- 'model_reasoning_effort="medium"' "$codex_marker" >/dev/null
+@@ -293,6 +296,12 @@ codex_fails 70 hard codex-incomplete.md env CODEX_TEST_MODE=incomplete
+ codex_fails 70 hard codex-timeout.md env CODEX_TEST_MODE=hang CODEX_MAX_TIME_SECONDS=1
+ jq -e '.reason == "Codex invocation timed out" and .owner == "claude"' "$test_root/.collab/codex-timeout.diagnostic.json" >/dev/null
+ 
++# Uncommitted wrapper changes are refused (no bypass).
++print '# local edit' >> "$root/codex-review.sh"
++set +e; codex_review hard codex-dirty.md env CODEX_TEST_MODE=success >/dev/null 2>&1; code=$?; set -e
++[[ $code -eq 78 ]] && jq -e '.reason == "gateway wrapper files have uncommitted changes"' "$test_root/.collab/codex-dirty.diagnostic.json" >/dev/null
++git -C "$root" checkout -q -- codex-review.sh
++
+ # An agent never reviews work it owns; owner is recorded on every reviewer.
+ owner_rejects() {
+   set +e; PATH="$test_root/bin:$PATH" "$@" >/dev/null 2>&1; local code=$?; set -e

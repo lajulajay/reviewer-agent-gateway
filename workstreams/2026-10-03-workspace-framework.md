@@ -50,6 +50,7 @@ changed by this workstream until the user approves a rollout.
 | r03 (v3) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r03.md` | REJECT |
 | r04 (v4) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r04.md` | REJECT |
 | r05 (v5) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r05.md` | REJECT |
+| r06 (implementation 4d3f7bc) | Codex | hard (gpt-6-sol, high) | `.collab/codex-2026-10-03-workspace-framework-r06.md` | REJECT |
 
 ## Findings and conditions
 
@@ -122,6 +123,38 @@ changed by this workstream until the user approves a rollout.
 | R05-F13 | major | (see r05) | Accepted: baseline is the effective limit; never raised | resolved in v6 |
 | R05-F14 | major | (see r05) | Accepted: inventory recorded as command, counts, needed files | resolved in v6 |
 | R05-F15 | major | (see r05) | Accepted: compact rows keyed to artifact and ID; exact text read from artifact | resolved in v6 |
+| R02-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R02-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R02-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R02-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R02-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R02-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R03-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R03-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R03-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R03-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R03-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R03-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R04-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R04-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R04-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R04-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R04-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R04-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R05-C1 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R05-C2 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R05-C3 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R05-C4 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R05-C5 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R05-C6 | condition | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F1 | blocker | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F2 | blocker | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F3 | blocker | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F4 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F5 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F6 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F7 | major | (see raw review) | open: legacy triage 2026-10-03 | open |
+| R06-F8 | minor | (see raw review) | open: legacy triage 2026-10-03 | open |
 
 ## Log
 
@@ -147,3 +180,9 @@ changed by this workstream until the user approves a rollout.
 - 2026-10-03: r05 Codex REJECT (2 blockers, both refinements; 3 majors from v5's own
   edits). All accepted. v6 = v5 plus targeted edits tagged R05. Owner
   recommendation: stop paper rounds; next review is of the implementation.
+- 2026-10-03: r06 (first implementation review) Codex REJECT: 3 blockers, 4
+  majors, 1 minor, all accepted and fixed in `daf4bb5`. Legacy triage: the
+  24 conditions of r02-r05, never dispositioned before docs-check existed,
+  are now rows (open). Round-4/5 verdicts judged findings positionally without
+  naming IDs, so their quotes cannot close rows under the strict closure rule;
+  r07 is asked for one explicit status line per item ID.
