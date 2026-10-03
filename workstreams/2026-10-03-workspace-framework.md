@@ -228,3 +228,6 @@ Compact rows (R05-F15): exact text stays in the indexed raw review.
 - 2026-10-03: r08 Codex REJECT: 8 more items resolved (59 of 109 closed); 50 open
   plus 10 new r08 items; no item tagged inherent. Owner assessment: the loop
   has reached its asymptote; escalated to the user for a policy decision.
+- 2026-10-03: pilot workstream in kalshi-finance-agent closed with docs-check done
+  (4 rounds, 13 items). It found three gateway defects (fixed: 00fecbf,
+  1b041af, 9faeb90) and an unrelated missing Modal app.
