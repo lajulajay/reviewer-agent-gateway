@@ -1,0 +1,10 @@
+{
+  "hard_model": "claude-opus-5-5",
+  "routine_two_releases_down_scope": "all_models",
+  "models_newest_first": [
+    {"id": "claude-sonnet-5-5", "released_on": "2026-09-28", "included_no_credits": true},
+    {"id": "claude-opus-5-5", "released_on": "2026-09-22", "included_no_credits": true},
+    {"id": "claude-opus-5", "released_on": "2026-07-24", "included_no_credits": true},
+    {"id": "claude-sonnet-5", "released_on": "2026-06-30", "included_no_credits": true}
+  ]
+}
