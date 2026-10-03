@@ -39,6 +39,7 @@ R01-F1 is resolved.
 R01-C1 is resolved.
 R01-F2 remains open: budgets still drift.
 R01-F3 was discussed at length.
+> R02-F9 is resolved.
 
 F1 [minor]: the handoff wording could be tighter.
 F2 [major]: budgets still drift.
@@ -80,8 +81,13 @@ CLOSURE_LOG = ("- r01: raw review compared with its rows; no unlabeled actionabl
                "- r02: raw review compared with its rows; no unlabeled actionable item\n")
 
 
+GATEWAY_BASELINE_ENV = {}
+
+
 def run(*args):
-    r = subprocess.run([sys.executable, str(TOOL), *map(str, args)], capture_output=True, text=True)
+    import os
+    env = dict(os.environ, **GATEWAY_BASELINE_ENV)
+    r = subprocess.run([sys.executable, str(TOOL), *map(str, args)], capture_output=True, text=True, env=env)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -152,6 +158,14 @@ class DocsCheckTest(unittest.TestCase):
         self.f.artifact("codex-x-r01.md", REVIEW1)
         self.f.artifact("codex-x-r02.md", REVIEW2)
         self.f.baseline()
+        # Fixture agent cache, so tests never depend on live memory.
+        self.mem = Path(self.tmp.name) / "memory"
+        self.mem.mkdir()
+        (self.mem / "MEMORY.md").write_text("- [a](a.md)\n")
+        (self.mem / "a.md").write_text("a" * 100)
+        gb = Path(self.tmp.name) / "gateway-baseline.json"
+        gb.write_text(json.dumps({"agent_cache": {"dir": str(self.mem), "files": {}, "total": 0}}))
+        GATEWAY_BASELINE_ENV["DOCS_CHECK_GATEWAY_BASELINE"] = str(gb)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -323,13 +337,13 @@ class DocsCheckTest(unittest.TestCase):
         self.assertIn("R01-C1: a condition closes only by", out)
         self.assertIn("R02-F1: status is 'open'", out)
         self.assertIn("R02-F1: no valid final disposition", out)
-        self.assertIn("R02-F2: user-decided quote must name R02-F2", out)
+        self.assertIn("R02-F2: user-decided quote must say 'R02-F2 accepted'", out)
         self.assertIn("closure: log lacks 'r01:", out)
 
     def test_user_decided_needs_dated_scoped_entry(self):
         rows = list(GOOD_ROWS)
-        rows[0] = ("R01-F1", "blocker", 'user-decided 2026-10-03 "R01-F1: accept the handoff risk for the pilot"', "closed")
-        quote = '"R01-F1: accept the handoff risk for the pilot"'
+        rows[0] = ("R01-F1", "blocker", 'user-decided 2026-10-03 "R01-F1 accepted: handoff risk for the pilot"', "closed")
+        quote = '"R01-F1 accepted: handoff risk for the pilot"'
         self.f.workstream(rows, decisions=f"- 2026-10-02, user, scope: pilot. Quote: {quote}", log=CLOSURE_LOG)
         self.assertIn("no Decisions entry dated 2026-10-03 with a scope", self.done()[1])
         self.f.workstream(rows, decisions=f"Free text: {quote}", log=CLOSURE_LOG)
@@ -337,6 +351,28 @@ class DocsCheckTest(unittest.TestCase):
         self.f.workstream(rows, decisions=f"- 2026-10-03, user, scope: pilot handoff.\n  Quote: {quote}", log=CLOSURE_LOG)
         code, out = self.done()
         self.assertEqual(code, 0, out)
+
+    def test_verified_line_must_be_exact_and_uncontradicted(self):
+        quoted = REVIEW2.replace("R01-F1 is resolved.", "> R01-F1 is resolved.")
+        self.f.artifact("codex-x-r02.md", quoted)
+        self.f.workstream(GOOD_ROWS, log=CLOSURE_LOG)
+        self.assertIn("R01-F1: r02 has no line 'R01-F1 is resolved.'", self.done()[1])
+        contradicted = REVIEW2.replace("R01-C1 is resolved.\n", "R01-C1 is resolved.\nR01-C1 remains open: actually not.\n")
+        self.f.artifact("codex-x-r02.md", contradicted)
+        self.assertIn("R01-C1: r02 also says R01-C1 remains open", self.done()[1])
+
+    def test_pilot_record_enforces_gateway_memory_budget(self):
+        self.f.workstream(GOOD_ROWS)
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+        (self.mem / "a.md").write_text("a" * 1600)
+        self.assertIn("agent cache a.md has 1600 characters (limit 1500)", self.record()[1])
+        (self.mem / "a.md").write_text("a" * 100)
+        for i in range(12):
+            (self.mem / f"m{i}.md").write_text("m" * 1400)
+        self.assertIn("agent cache totals", self.record()[1])
+        Path(GATEWAY_BASELINE_ENV["DOCS_CHECK_GATEWAY_BASELINE"]).write_text("{}")
+        self.assertIn("gateway baseline records no agent cache", self.record()[1])
 
     def test_carried_is_no_longer_accepted(self):
         rows = list(GOOD_ROWS)
@@ -376,9 +412,14 @@ class DocsCheckTest(unittest.TestCase):
         self.assertIn("in the future", handoff(inv, f"{future} `curl /health` -> 200"))
         self.assertIn("must read 'YYYY-MM-DD HH:MM `<command>` -> <result>'", handoff(inv, f"{fresh} deploy ok"))
         self.assertIn("needs 'Operational: no'", handoff(inv, "n/a (not operational)"))
-        (self.f.repo / "scratch.txt").write_text("x")
-        self.assertIn("git status shows 1 and 0", handoff(inv, f"{fresh} `curl /health` -> 200"))
-        (self.f.repo / "scratch.txt").unlink()
+        (self.f.repo / "new").mkdir()
+        (self.f.repo / "new" / "a.txt").write_text("x")
+        (self.f.repo / "new" / "b.txt").write_text("y")
+        self.assertIn("git status shows 2 and 0", handoff(inv, f"{fresh} `curl /health` -> 200"))
+        (self.f.repo / "new" / "a.txt").unlink()
+        (self.f.repo / "new" / "b.txt").unlink()
+        (self.f.repo / "new").rmdir()
+        self.assertIn("is not a valid date", handoff(inv, "2026-13-45 99:99 `curl /health` -> 200"))
         self.assertIn("needed file notes/missing.md is not committed",
                       handoff(inv.replace("next owner: none", "next owner: notes/missing.md"), f"{fresh} `curl /health` -> 200"))
         self.assertIn("docs-check transfer: PASS", handoff(inv, "n/a (not operational)", operational_no=True))

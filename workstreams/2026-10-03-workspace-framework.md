@@ -42,6 +42,11 @@ changed by this workstream until the user approves a rollout.
   to pilot". Paper review rounds stop at r05/v6; the next review covers the
   implementation.
 
+- 2026-10-03, user, scope: remaining review findings and pilot timing.
+  Quote: "proceed with cheap fixes and move on to pilot". Supersedes v6 §8
+  step 1 ("this workstream reaches done first"): open items stay listed; no
+  further verification round; the pilot starts after the cheap fixes.
+
 ## Reviews
 
 | Round | Reviewer | Tier | Artifact | Verdict |

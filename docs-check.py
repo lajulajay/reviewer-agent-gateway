@@ -13,6 +13,7 @@ Exit status 0 means pass; 1 means at least one error was printed.
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -235,18 +236,21 @@ def check_budgets(repo, errors):
     proto = GATEWAY / "PROTOCOL.md"
     if repo != GATEWAY and proto.is_file() and len(proto.read_text()) > BUDGET["PROTOCOL.md"]:
         errors.append(f"budget: gateway PROTOCOL.md exceeds {BUDGET['PROTOCOL.md']} characters")
-    mem = base.get("agent_cache")
-    if mem:
-        if not Path(mem["dir"]).is_dir():
-            errors.append(f"budget: agent cache directory {mem['dir']} is missing")
-            return
-        sizes, total = memory_sizes(mem["dir"])
-        if total > limit(BUDGET["memory:total"], mem.get("total")):
-            errors.append(f"budget: agent cache totals {total} characters (limit {limit(BUDGET['memory:total'], mem.get('total'))})")
-        for name, chars in sizes.items():
-            cap = BUDGET["memory:index"] if name == "MEMORY.md" else BUDGET["memory:entry"]
-            if chars > limit(cap, mem.get("files", {}).get(name)):
-                errors.append(f"budget: agent cache {name} has {chars} characters (limit {limit(cap, mem.get('files', {}).get(name))})")
+    if base.get("agent_cache"):
+        check_memory(base["agent_cache"], errors)
+
+
+def check_memory(mem, errors):
+    if not Path(mem["dir"]).is_dir():
+        errors.append(f"budget: agent cache directory {mem['dir']} is missing")
+        return
+    sizes, total = memory_sizes(mem["dir"])
+    if total > limit(BUDGET["memory:total"], mem.get("total")):
+        errors.append(f"budget: agent cache totals {total} characters (limit {limit(BUDGET['memory:total'], mem.get('total'))})")
+    for name, chars in sizes.items():
+        cap = BUDGET["memory:index"] if name == "MEMORY.md" else BUDGET["memory:entry"]
+        if chars > limit(cap, mem.get("files", {}).get(name)):
+            errors.append(f"budget: agent cache {name} has {chars} characters (limit {limit(cap, mem.get('files', {}).get(name))})")
 
 
 # ------------------------------------------------------------------- checks
@@ -290,6 +294,14 @@ def record(repo):
                 errors.append(f"{BASELINE}: legacy list grew after its first commit: {sorted(grown)[:3]}")
     if repo == GATEWAY and base and "agent_cache" not in base:
         errors.append(f"{BASELINE}: the gateway baseline must record the agent cache (report --memory DIR --add-memory)")
+    if repo != GATEWAY and base:
+        # DOCS_CHECK_GATEWAY_BASELINE exists only so tests do not read live memory.
+        override = os.environ.get("DOCS_CHECK_GATEWAY_BASELINE")
+        gateway_base = json.loads(Path(override).read_text()) if override else load_baseline(GATEWAY)
+        if "agent_cache" not in gateway_base:
+            errors.append("the gateway baseline records no agent cache, so the memory budget is unenforced")
+        else:
+            check_memory(gateway_base["agent_cache"], errors)
     for wpath in workstreams(repo):
         ws = Workstream(repo, wpath)
         name = wpath.relative_to(repo)
@@ -386,7 +398,9 @@ def transfer(repo, wrel):
     if not inv:
         errors.append("transfer: Inventory must read 'Inventory: `<command>`; <n> untracked, <n> ignored; needed by next owner: <paths> | none'")
     else:
-        _, status = git(repo, "status", "--porcelain", "--ignored")
+        code, status = git(repo, "status", "--porcelain", "--ignored", "--untracked-files=all")
+        if code != 0:
+            errors.append("transfer: git status failed")
         lines = status.splitlines()
         actual = (sum(l.startswith("?? ") for l in lines), sum(l.startswith("!! ") for l in lines))
         if (int(inv.group(2)), int(inv.group(3))) != actual:
@@ -407,7 +421,11 @@ def transfer(repo, wrel):
         if not t:
             errors.append("transfer: Runtime observation must read 'YYYY-MM-DD HH:MM `<command>` -> <result>'")
         else:
-            age = (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds()
+            try:
+                age = (datetime.now() - datetime.strptime(t.group(1), "%Y-%m-%d %H:%M")).total_seconds()
+            except ValueError:
+                errors.append(f"transfer: Runtime observation time {t.group(1)} is not a valid date")
+                return errors
             if age < -60:
                 errors.append("transfer: Runtime observation time is in the future")
             elif age > MAX_OBSERVATION_AGE:
@@ -445,16 +463,19 @@ def disposition_errors(ws, rid):
         later = int(m.group(1))
         if later <= rnd or later not in ws.reviews:
             return [f"{rid}: verified cites r{later:02d}, which is not a later indexed round"]
-        if not re.search(rf"(?m)^\W*{re.escape(rid)} is resolved\.?\W*$", artifact_text(ws.repo / ws.reviews[later])):
+        text = artifact_text(ws.repo / ws.reviews[later])
+        if not re.search(rf"(?m)^{re.escape(rid)} is resolved\.$", text):
             return [f"{rid}: r{later:02d} has no line '{rid} is resolved.'"]
+        if re.search(rf"(?m)^\W*{re.escape(rid)} remains open", text):
+            return [f"{rid}: r{later:02d} also says {rid} remains open"]
         return []
     m = re.match(r'^user-decided (\d{4}-\d{2}-\d{2}) "(.+)"$', disp)
     if m:
         # The quote must sit in a Decisions entry of the same date with a stated
         # scope, and name this item. Authenticity of the transcription is policy.
         day, quote = m.group(1), m.group(2)
-        if rid not in quote:
-            return [f"{rid}: user-decided quote must name {rid}"]
+        if not re.search(rf"\b{re.escape(rid)} accepted\b", quote, re.I):
+            return [f"{rid}: user-decided quote must say '{rid} accepted'"]
         if not any(d == day and norm(quote) in norm(text) for d, text in decision_entries(ws)):
             return [f"{rid}: no Decisions entry dated {day} with a scope contains the quote"]
         return []
