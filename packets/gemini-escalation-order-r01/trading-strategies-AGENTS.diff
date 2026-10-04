@@ -1,0 +1,55 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 63f9ca9..1ddb71b 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -9,7 +9,7 @@ target; the H-001 asymmetric kill test is complete and falsified the published
+ rule. No other return test, broker write, paper order, live order, new data
+ purchase, or G6 architecture is authorized.
+ 
+-Standards: reviewer-agent-gateway@70bc031a902b09c89e19042260636bc1504b4174
++Standards: reviewer-agent-gateway@47f6d27ab44c0b8a1cefddf63377abe361ada3dd
+ 
+ ## Read these first
+ 
+@@ -42,8 +42,6 @@ canonical protocol in
+   recorded in an `Owner:` line in the workstream's `workstreams/` file.
+   The owner maintains the workstream record, implements only
+   authorized work, runs verification, responds to review, and reports results.
+-  The gateway protocol's older `COLLAB.md` owner-location sentence is pending
+-  correction; the user's 2026-10-03 rollout decision uses `workstreams/` here.
+ - **Primary reviewer — whichever of Codex/Claude does not own the work.**
+   Reviews adversarially and read-only; does not edit implementation, commit,
+   push, deploy, purchase data, or operate a broker.
+@@ -88,9 +86,10 @@ model(s), and a one-sentence tier rationale in the workstream record.
+ ### Gemini escalation
+ 
+ Do not invoke Gemini for routine agreement, stylistic review, or to
+-manufacture a majority. Invoke Gemini only if the primary reviewer is
+-unavailable or a substantive primary review leaves the same decision-material
+-disagreement unresolved. The owner first prepares a compact disagreement
++manufacture a majority. Invoke Gemini when the primary reviewer is
++unavailable, and always before a decision-material disagreement that survives
++a substantive primary review goes to the user (canonical protocol,
++"Disagreement escalation"). The owner first prepares a compact disagreement
+ packet stating the competing claims, evidence, exact decision requested, and
+ prohibited actions, then runs:
+ 
+@@ -101,7 +100,8 @@ reviewers/gemini-review.sh --owner <codex|claude> hard <prompt-file> <new-output
+ Gemini never receives `.env` files, broker/account details, private
+ artifacts, licensed raw data, or unsealed outcomes. Its response does not
+ decide an issue by vote. Empirical disagreements return to primary evidence
+-or a frozen test; unresolved policy choices return to the user.
++or a frozen test; unresolved policy choices return to the user with Gemini's
++assessment.
+ 
+ The gateway's Gemini wrapper requires the signed-in Google plan path, rejects
+ API-key environment variables, and checks remaining quota before a review.
+@@ -172,7 +172,7 @@ Within an already authorized scope:
+ - any spend, subscription, or new paid entitlement;
+ - any broker-write, order-review, paper-trading, or live-trading capability;
+ - expanding beyond a frozen experiment, including extra variants or history;
+-- accepting an unresolved reviewer disagreement; and
++- accepting an unresolved reviewer disagreement (after the Gemini review); and
+ - repository initialization, commit, push, deploy, or external publication.
+ 
+ ## Artifact and handoff discipline

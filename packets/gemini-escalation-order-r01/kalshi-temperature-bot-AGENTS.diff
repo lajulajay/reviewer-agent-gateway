@@ -1,0 +1,46 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index f8aaf7d..9d25e07 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -4,7 +4,7 @@ Kalshi temperature-market calibration and strategy-research bot. Trading work
+ is currently paper-only; offline analysis and paper results do not authorize
+ live orders.
+ 
+-Standards: reviewer-agent-gateway@70bc031a902b09c89e19042260636bc1504b4174
++Standards: reviewer-agent-gateway@47f6d27ab44c0b8a1cefddf63377abe361ada3dd
+ 
+ ## Read these first
+ 
+@@ -72,9 +72,9 @@ shortcut it because a change looks small or a first review is favorable.
+      .collab/codex-YYYY-MM-DD-topic.md <packet-file>...
+    ```
+ 
+-   Escalate to Gemini only when the primary reviewer is unavailable or a
+-   substantive primary review leaves the same decision-material disagreement
+-   unresolved; prepare a compact packet stating the competing claims,
++   Escalate to Gemini when the primary reviewer is unavailable, and always
++   before a decision-material disagreement that survives a substantive round
++   goes to the user (canonical protocol, "Disagreement escalation"); prepare a compact packet stating the competing claims,
+    evidence, exact decision, and prohibited actions:
+ 
+    ```bash
+@@ -101,7 +101,7 @@ shortcut it because a change looks small or a first review is favorable.
+    fixes confirmed defects, and requests another round after a material
+    change, supplying the delta rather than the whole history. Empirical
+    disputes return to evidence or a frozen test; unresolved policy choices
+-   return to the user.
++   return to the user after the Gemini step.
+ 8. A review is complete only when blockers are resolved or explicitly put to
+    the user. Reviewer approval does not authorize a commit or rollout.
+ 
+@@ -143,7 +143,9 @@ and rerun it—not a reason to stop and wait for prompting.
+ 
+ ### What stops for the user
+ 
+-Do not decide these between agents:
++Do not decide these between agents. When the agents disagree on one of
++them, the Gemini review comes first; the user then decides with both
++positions and Gemini's assessment:
+ 
+ - Product, policy, or experiment-design choices with materially different
+   outcomes.
