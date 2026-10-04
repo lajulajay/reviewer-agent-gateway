@@ -1,0 +1,39 @@
+commit efc1333347d0e5c5745175624c7ba8b5d2225ce4
+Author: lajulajay <sheye.aliu@gmail.com>
+Date:   Sat Oct 3 21:24:33 2026 -0400
+
+    PROTOCOL/README: owners and review indexes live in workstreams/, not COLLAB.md
+    
+    Found by Codex's trading-strategies adoption review.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index 940efcd..840f273 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -16,8 +16,9 @@ rules. If repository wording differs from this file, this file wins.
+ 
+ Codex and Claude are interchangeable owners; neither is the default.
+ 
+-- **Recording the owner.** Each workstream entry in the repository's
+-  `COLLAB.md` starts with an `Owner: Codex` or `Owner: Claude` line. Only the
++- **Recording the owner.** Each workstream file in the repository's
++  `workstreams/` starts with an `Owner: Codex` or `Owner: Claude` line
++  (legacy `COLLAB.md` entries before adoption kept theirs). Only the
+   user assigns or changes the owner. A change is recorded as a new dated line,
+   e.g. `Owner: Claude (from Codex, 2026-10-03, Codex limit reached)`; earlier
+   entries are never rewritten.
+diff --git a/README.md b/README.md
+index 29f2ee9..0a33805 100644
+--- a/README.md
++++ b/README.md
+@@ -61,7 +61,7 @@ a ceremonial second opinion or model vote.
+ 
+ The owner chooses the smallest sufficient tier before invocation and records
+ the requested alias, resolved model(s), and a one-sentence tier rationale in
+-the review artifact or its `COLLAB.md` disposition. `opus` does not replace the
++the review artifact or its workstream's review index. `opus` does not replace the
+ escalation rule in PROTOCOL.md: unresolved empirical questions still return
+ to evidence or a frozen test, and unresolved policy choices return to the
+ sponsor.
