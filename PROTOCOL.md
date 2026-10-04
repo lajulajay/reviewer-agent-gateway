@@ -16,8 +16,9 @@ rules. If repository wording differs from this file, this file wins.
 
 Codex and Claude are interchangeable owners; neither is the default.
 
-- **Recording the owner.** Each workstream entry in the repository's
-  `COLLAB.md` starts with an `Owner: Codex` or `Owner: Claude` line. Only the
+- **Recording the owner.** Each workstream file in the repository's
+  `workstreams/` starts with an `Owner: Codex` or `Owner: Claude` line
+  (legacy `COLLAB.md` entries before adoption kept theirs). Only the
   user assigns or changes the owner. A change is recorded as a new dated line,
   e.g. `Owner: Claude (from Codex, 2026-10-03, Codex limit reached)`; earlier
   entries are never rewritten.

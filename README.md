@@ -61,7 +61,7 @@ a ceremonial second opinion or model vote.
 
 The owner chooses the smallest sufficient tier before invocation and records
 the requested alias, resolved model(s), and a one-sentence tier rationale in
-the review artifact or its `COLLAB.md` disposition. `opus` does not replace the
+the review artifact or its workstream's review index. `opus` does not replace the
 escalation rule in PROTOCOL.md: unresolved empirical questions still return
 to evidence or a frozen test, and unresolved policy choices return to the
 sponsor.
