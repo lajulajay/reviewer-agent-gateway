@@ -32,10 +32,21 @@ Codex and Claude are interchangeable owners; neither is the default.
   or send it to Gemini.
 - **Escalation.** Use the primary reviewer for substantive work. Use Gemini
   when the primary reviewer is unavailable (usage limit, outage, failed
-  invocation after diagnosis) or when a substantive primary review leaves the
-  same decision-material disagreement unresolved. Do not use reviewers for
-  routine agreement, style, or model voting. Empirical disputes return to
-  evidence or a frozen test; unresolved policy choices return to the user.
+  invocation after diagnosis). Do not use reviewers for routine agreement,
+  style, or model voting.
+- **Disagreement escalation (mandatory order).** When the owner and the
+  primary reviewer still disagree on a decision-material point after a
+  substantive round, the owner must obtain a Gemini review before bringing
+  the disagreement to the user, including policy disagreements and
+  disagreements about decisions reserved to the user. Empirical disputes
+  first go to evidence or a frozen test; Gemini reviews what that leaves
+  open. The user then receives one packet: the competing claims, the
+  evidence, Gemini's assessment, and the exact decision needed. Skip Gemini
+  only when it is unavailable (quota below the wrapper floor, outage, or
+  failed invocation after diagnosis), and say so in that packet. Gemini's
+  view is advisory; it never decides by vote, and the decision stays with the
+  user. A question that is the user's to decide but on which the agents
+  agree goes to the user directly.
 
 ## Invocation
 
