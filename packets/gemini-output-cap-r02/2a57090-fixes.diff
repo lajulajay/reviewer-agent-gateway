@@ -1,0 +1,89 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index a273a56..7f3249b 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -104,8 +104,8 @@ evidence. A finding that a script or test disproves is dispositioned
+ `rejected:` with that evidence; it does not justify another round. A
+ `Mechanical check` line gives a quoted value's measured length, not a
+ verdict: the owner reads the finding to see which number it claims for the
+-value. A note that a finding cites a `file://` path means the quoted code did
+-not come from a file; the owner checks it against the packet before acting.
++value. A note that a finding cites a `file://` path means the link verifies
++nothing; the owner checks any quoted code against the packet before acting.
+ 
+ ## Packets and isolation
+ 
+diff --git a/README.md b/README.md
+index b5937d4..ae025df 100644
+--- a/README.md
++++ b/README.md
+@@ -161,8 +161,9 @@ dropped on 2026-10-08: `agy` 1.3.1 warns it has no effect with slash commands
+ disabled, and the deny-all hook already blocks every tool.)
+ 
+ The hard-tier model spends its output tokens on hidden reasoning when the
+-packet is large: on 2026-10-08 two runs with 215-245 KB packets returned no
+-complete review, while 40 KB packets succeeded. Hard-tier calls are therefore
++packet is large: on 2026-10-08 two runs with 215-245 KB packets hit the
++output-token limit (one had written a complete review, the other stopped
++before its verdict), while 40 KB packets succeeded. Hard-tier calls are therefore
+ refused above `GEMINI_HARD_MAX_PROMPT_BYTES` (default 150000), before the
+ budget check, so the refusal uses no round. When `agy` reports the
+ output-token limit (`status: "ERROR"`), the wrapper keeps the returned review
+@@ -203,8 +204,8 @@ turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
+ artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
+ `Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
+ when a review says a quoted hex value has a length it does not have, or cites
+-a `file://` path (reviewers have no file access, so the quoted code did not
+-come from a file). `reviewer-validate.py` refuses a finding labeled with a
++a `file://` path (reviewers have no file access, so the link does not verify
++any quoted code; the owner checks the quote against the packet). `reviewer-validate.py` refuses a finding labeled with a
+ severity other than `blocker`, `major` or `minor`, which would otherwise go
+ untracked.
+ 
+diff --git a/gemini-review.sh b/gemini-review.sh
+index 216fdff..040947f 100755
+--- a/gemini-review.sh
++++ b/gemini-review.sh
+@@ -64,7 +64,7 @@ max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
+ prompt_bytes="$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')"
+ [[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
+ # The hard-tier model spends its output tokens on hidden reasoning over large
+-# packets and returns no review (215-245 KB failed, 40 KB succeeded on
++# packets and hits its output-token limit (215-245 KB failed, 40 KB succeeded on
+ # 2026-10-08). Refuse before the budget check so no round is used.
+ hard_max_bytes="${GEMINI_HARD_MAX_PROMPT_BYTES:-150000}"
+ [[ "$model" != "$(jq -r '.hard_model // empty' "$policy")" || "$prompt_bytes" -le "$hard_max_bytes" ]] \
+@@ -101,7 +101,7 @@ agy_error="$(grep -m1 AGY_ERROR "$stderr" || true)"
+ # only if it passes validation, and record the warning.
+ truncation=""
+ if ! jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/dev/null 2>&1; then
+-  jq -e '.status == "ERROR" and ((.error // "") | test("output token limit")) and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 \
++  jq -e '.status == "ERROR" and ((.error // "") | test("^Your previous response was cut off because it exceeded the output token limit")) and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 \
+     || fail 70 "Gemini invocation did not succeed"
+   jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" 2>> "$stderr" \
+     || fail 70 "Gemini hit the output-token limit before finishing the review; split the packet or send a delta"
+diff --git a/reviewer-claims.py b/reviewer-claims.py
+index 8c0fcad..fc62042 100755
+--- a/reviewer-claims.py
++++ b/reviewer-claims.py
+@@ -11,8 +11,9 @@ a correct finding about a truncated value. The owner reads the finding with
+ the note and decides; the wrapper records the note so that needs no round.
+ 
+ A line that cites a file:// path also gets a note. Reviewers have no file
+-access, so such a citation means the quoted code came from the model, not a
+-file: Gemini linked an invented proxy.ts into its empty sandbox on 2026-10-08.
++access, so the link was not read and does not show where quoted code came
++from; on 2026-10-08 Gemini linked into its empty sandbox while quoting
++proxy.ts code that was not in the packet.
+ """
+ 
+ import re
+@@ -29,7 +30,7 @@ def notes(text):
+         label = re.match(r"^\W*(F\d+|C\d+)", line)
+         where = label.group(1) if label else "a review line"
+         for uri in FILE_URI.findall(line):
+-            out.append(f"{where} cites {uri}; the reviewer had no file access, so check the quoted code against the packet")
++            out.append(f"{where} cites {uri}; the reviewer had no file access, so the link does not verify the quoted code; check it against the packet")
+         values = HEX.findall(line)
+         if not values:
+             continue
