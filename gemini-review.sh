@@ -63,6 +63,8 @@ $(<"$(dirname "$0")/output-contract.txt")"
 max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
 [[ "$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
 run_agy() { (cd "$workspace" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_GENAI_USE_VERTEXAI -u GOOGLE_GENAI_USE_GCA -u GOOGLE_CLOUD_PROJECT "$@"); }
+# Gemini tiers are not capped per topic: Gemini is the escalation reviewer.
+prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" gemini routine "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
 # Quota preflight: the Gemini group shares one weekly limit across Flash and
 # Pro. Stop with headroom left rather than spending AI credits after it.
 min_quota="${GEMINI_REVIEW_MIN_QUOTA:-0.15}"
@@ -92,7 +94,8 @@ jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/
 resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response" | sort -u | paste -sd, -)"; [[ -n "$resolved" ]] || fail 74 "Gemini returned no resolved model metadata"
 [[ "$resolved" == "$model" ]] || fail 74 "Gemini resolved outside selected model"
 jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
+checks="$(jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-claims.py" | jq -Rsc 'split("\n") | map(select(length > 0))')"
 denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
-jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" \
-  '. + {reviewer_metadata:{owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied}}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" \
+  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
 chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"

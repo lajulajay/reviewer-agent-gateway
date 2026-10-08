@@ -174,6 +174,23 @@ a backstop. Artifacts keep the top-level `response` field and add
 the sign-in), so the copy is left in place and traceable by the recorded ID.
 Packets must still exclude secrets; the private-path rules above apply.
 
+## Review budget and usage records
+
+`review-budget.py` runs in every wrapper (Kimi is inactive and excluded)
+before the model call and applies `review-budget.json`; the rules are in
+[PROTOCOL.md](PROTOCOL.md#review-budget). It counts the topic's artifacts in
+`.collab/`, plus diagnostics for failed calls that reached the model, and
+counts the daily cap by file modification date. Changing the limits is a
+committed change to `review-budget.json`; the wrappers refuse to run with it
+uncommitted.
+
+Artifacts record what each call used: the Claude header has `Effort:` and
+`Usage:` (tokens, `total_cost_usd` as Claude Code reports it, duration, and
+turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
+artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
+`Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
+when a review says a quoted hex value has a length it does not have.
+
 Run provider-free regression checks with:
 
 ```bash

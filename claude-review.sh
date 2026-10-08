@@ -43,9 +43,18 @@ else
   model="$requested_model"
 fi
 { cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done; } > "$combined"
+# Review budget (review-budget.json): round caps per topic, one hard-tier
+# round per topic, a daily cap per repository, and a lower effort for
+# follow-up rounds, which only check the owner's responses.
+tier=routine
+[[ "$requested_model" == opus || ( "$policy_active" == true && "$model" == "$(jq -r '.hard_model // empty' "$policy")" ) ]] && tier=hard
+prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" claude "$tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+effort_round=first_round; [[ "$prior_rounds" -eq 0 ]] || effort_round=follow_up
+effort="$(jq -er --arg r "$effort_round" '.claude_effort[$r]' "$(dirname "$0")/review-budget.json")" || fail 78 "review-budget.json has no claude_effort.$effort_round"
 set +e
-perl -e 'alarm($ENV{CLAUDE_MAX_TIME_SECONDS} || 600); exec @ARGV' claude -p --safe-mode --model "$model" --tools= --system-prompt "You are an isolated external adversarial reviewer. Use only the supplied packet. Do not use tools or edit state. $(<"$(dirname "$0")/output-contract.txt")" --no-session-persistence --output-format json --debug-file "$debug" < "$combined" > "$stdout" 2> "$stderr"
+perl -e 'alarm($ENV{CLAUDE_MAX_TIME_SECONDS} || 600); exec @ARGV' claude -p --safe-mode --model "$model" --effort "$effort" --tools= --system-prompt "You are an isolated external adversarial reviewer. Use only the supplied packet. Do not use tools or edit state. $(<"$(dirname "$0")/output-contract.txt")" --no-session-persistence --output-format json --debug-file "$debug" < "$combined" > "$stdout" 2> "$stderr"
 code=$?; set -e
+[[ $code -ne 142 ]] || fail 70 "Claude invocation timed out"
 [[ $code -eq 0 ]] || fail 70 "Claude invocation failed"
 jq -e '.is_error == false and (.result | type == "string")' "$stdout" >/dev/null 2>&1 || fail 70 "Claude returned invalid JSON"
 jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Claude response failed substance validation"
@@ -53,5 +62,7 @@ resolved="$(jq -r '[(.modelUsage // {} | keys[]?), .model?] | map(select(. != nu
 if [[ "$policy_active" == true ]]; then
   jq -e --arg model "$model" '(.modelUsage // {} | has($model)) or .model == $model' "$stdout" >/dev/null 2>&1 || fail 74 "Claude resolved outside selected model"
 fi
-{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print ''; jq -r '.result' "$stdout"; } > "$output"
+usage="$(jq -c '{usage: (.usage // null | if . then {input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens} else null end), total_cost_usd, duration_ms, num_turns}' "$stdout")"
+checks="$(jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-claims.py")"
+{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
 chmod 444 "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Claude artifact or checksum was not created"; print "captured $output"

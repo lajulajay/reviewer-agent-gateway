@@ -5,3 +5,7 @@ the findings and conditions, write the line `ATTESTATION: all actionable
 findings and conditions are labeled.` Your final non-empty line must be
 exactly one of: VERDICT: ACCEPT; VERDICT: ACCEPT WITH CONDITIONS; VERDICT:
 REJECT. Do not use any other verdict label or mention another verdict line.
+You have no tools and cannot reliably count characters: do not base a finding
+on the length of a hash or other long identifier. If a length matters, ask in
+a condition for a script-produced check. Conditions must concern the work
+under review, not hypothetical future packets.

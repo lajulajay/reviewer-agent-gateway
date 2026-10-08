@@ -38,6 +38,7 @@ grep -q 'Logged in using ChatGPT' "$tmp/login.txt" || fail 78 "Codex is not usin
 policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
 model="$(jq -er --arg tier "$requested_model" '.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier must be one of: $(jq -r '.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
 effort="$(jq -er --arg tier "$requested_model" '.tiers[$tier].reasoning_effort | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier has no reasoning_effort"
+prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" codex "$requested_model" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
 codex_version="$(codex --version 2>> "$stderr" | head -1)"
 { cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done
   print -r -- "
@@ -67,5 +68,7 @@ python3 "$(dirname "$0")/reviewer-validate.py" < "$last" || fail 70 "Codex respo
 blocked="$(jq -s '[foreach .[] as $e (false; . or ($e.type == "turn.started"); if . and $e.type == "item.completed" and $e.item.type == "error" then 1 else empty end)] | length' "$stdout" 2>/dev/null || print 0)"
 # codex exec does not report the serving model; the artifact records the
 # pinned request.
-{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print ''; cat "$last"; } > "$tmp/final.md"
+usage="$(jq -sc '[.[] | select(.type == "turn.completed") | .usage] | last // null' "$stdout" 2>/dev/null || print null)"
+checks="$(python3 "$(dirname "$0")/reviewer-claims.py" < "$last")"
+{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
 chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Codex artifact or checksum was not created"; print "captured $output"

@@ -73,6 +73,34 @@ root-cause explanations; or a decision-material disagreement or inconclusive
 lower-tier round. Model mappings and per-provider details are in
 [README.md](README.md).
 
+## Review budget
+
+Every review call spends the user's plan usage, so the wrappers enforce
+`review-budget.json` before calling a model (exit 79 when refused):
+
+- **Five rounds per topic, then Gemini, then the user.** The topic is the
+  output name without provider, date, and `-rNN`; rounds from every provider
+  count together, including failed calls that reached the model. After five,
+  only `gemini-review.sh` may run, once. After that the owner brings the open
+  points to the user in one packet, as in the disagreement escalation above:
+  the competing claims, the evidence, Gemini's assessment, and the exact
+  decision needed. No further review runs unless the user approves an
+  override.
+- **One hard-tier round per topic** (`opus` or Codex `hard`); use it where it
+  matters most.
+- **Eight reviews per provider per repository per day.**
+- **Claude follow-up rounds run at low effort**; the first round runs at
+  medium. A follow-up packet lists the open IDs and the owner's response to
+  each, and asks only whether each is resolved.
+- **Only the user may lift a limit.** `REVIEW_BUDGET_OVERRIDE=<reason>`
+  records the reason in the artifact, and `docs-check.py record` fails until
+  a Decisions entry quotes the user's "budget override" approval.
+
+Before requesting another round, the owner checks each finding against the
+evidence. A finding that a script, test, or the artifact's `Mechanical check`
+line disproves is dispositioned `rejected:` with that evidence; it does not
+justify another round.
+
 ## Packets and isolation
 
 - Reviewers are read-only. They receive only explicit, sanitized packet
@@ -83,6 +111,10 @@ lower-tier round. Model mappings and per-provider details are in
   or commit range, relevant evidence and invariants, the competing claims,
   the exact decision, prohibited actions, and named questions. Do not ask for
   repository-wide rediscovery.
+- Reviewers cannot count characters. Write every hash or long identifier in
+  8-character groups next to a script-produced length (e.g.
+  `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
+  check the reviewer cannot run.
 - Never include `.env` files, credentials, keys, production data, private or
   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
 

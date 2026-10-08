@@ -23,6 +23,7 @@ if [[ "$1" == auth && "$2" == status ]]; then
   exit 0
 fi
 if [[ "${CLAUDE_TEST_MODE:-}" == success ]]; then
+  [[ -z "${CLAUDE_MOCK_ARGS:-}" ]] || print -r -- "$*" > "$CLAUDE_MOCK_ARGS"
   model=""
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == --model ]]; then model="$2"; break; fi
@@ -31,8 +32,8 @@ if [[ "${CLAUDE_TEST_MODE:-}" == success ]]; then
   [[ -z "${CLAUDE_MOCK_MARKER:-}" ]] || print -r -- "$model" > "$CLAUDE_MOCK_MARKER"
   body=""
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
-  body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
-  jq -n --arg model "${CLAUDE_MOCK_RESOLVED:-$model}" --arg result "$body" '{is_error:false,result:$result,modelUsage:{($model):{}}}'
+  body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n'"${CLAUDE_MOCK_EXTRA:-}"$'\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
+  jq -n --arg model "${CLAUDE_MOCK_RESOLVED:-$model}" --arg result "$body" '{is_error:false,result:$result,modelUsage:{($model):{}},usage:{input_tokens:10,output_tokens:20,cache_read_input_tokens:0,cache_creation_input_tokens:0},total_cost_usd:0.01,duration_ms:5,num_turns:1}'
   exit 0
 fi
 exit 42
@@ -181,9 +182,9 @@ claude_marker="$test_root/claude-marker"
 PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" \
   CLAUDE_TEST_MODE=success CLAUDE_MOCK_MARKER="$claude_marker" \
   "$root/claude-review.sh" opus "$test_root/prompt.md" \
-  "$test_root/.collab/claude-hard.md" "$test_root/packet/source.md" >/dev/null
+  "$test_root/.collab/claude-opus.md" "$test_root/packet/source.md" >/dev/null
 [[ "$(<"$claude_marker")" == claude-opus-5-5 ]]
-grep -Fx 'Selected model: claude-opus-5-5' "$test_root/.collab/claude-hard.md" >/dev/null
+grep -Fx 'Selected model: claude-opus-5-5' "$test_root/.collab/claude-opus.md" >/dev/null
 
 PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" \
   CLAUDE_TEST_MODE=success CLAUDE_MOCK_MARKER="$claude_marker" \
@@ -345,6 +346,58 @@ OLLAMA_TEST_MODE=success PATH="$test_root/bin:$PATH" \
   "$test_root/.collab/kimi-success.md" "$test_root/packet/source.md" >/dev/null
 [[ -s "$test_root/.collab/kimi-success.md" ]]
 [[ -s "$test_root/.collab/kimi-success.md.sha256" ]]
+
+# Review budget: five rounds per topic across providers, then one Gemini
+# round, then refusal; one hard-tier round per topic; a daily cap per provider.
+broot="$test_root/budget"; mkdir -p "$broot/.collab"; print 'Budget packet.' > "$broot/packet.md"
+claude_args="$test_root/claude-args"
+breview() {
+  local wrapper="$1" tier="$2" output="$3"; shift 3
+  PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
+    CODEX_TEST_MODE=success AGY_TEST_MODE=success CLAUDE_MOCK_ARGS="$claude_args" "$@" \
+    "$root/$wrapper" --packet-root "$test_root" --owner codex "$tier" "$test_root/prompt.md" "$broot/.collab/$output" "$broot/packet.md"
+}
+brefused() {
+  local pattern="$1" wrapper="$2" tier="$3" output="$4"; shift 4
+  : > "$claude_args"
+  set +e; breview "$wrapper" "$tier" "$output" "$@" >/dev/null 2>&1; local code=$?; set -e
+  [[ $code -eq 79 && ! -e "$broot/.collab/$output" && ! -s "$claude_args" ]] \
+    || { print -u2 "budget $output: expected refusal 79, got $code"; exit 1; }
+  jq -e --arg p "$pattern" '.reason | contains($p)' "$broot/.collab/${${output%.md}%.json}.diagnostic.json" >/dev/null \
+    || { print -u2 "budget $output: reason lacks '$pattern'"; exit 1; }
+}
+breview claude-review.sh sonnet claude-2026-10-08-topic-r01.md >/dev/null
+grep -F -- '--effort medium' "$claude_args" >/dev/null
+for line in 'Effort: medium' 'Usage: {"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"total_cost_usd":0.01,"duration_ms":5,"num_turns":1}'; do
+  grep -Fx -- "$line" "$broot/.collab/claude-2026-10-08-topic-r01.md" >/dev/null || { print -u2 "missing: $line"; exit 1; }
+done
+breview claude-review.sh sonnet claude-2026-10-08-topic-r02.md >/dev/null
+grep -F -- '--effort low' "$claude_args" >/dev/null
+# A failed call that reached the model counts as a round.
+set +e; breview claude-review.sh sonnet claude-2026-10-08-topic-r03.md env CLAUDE_MOCK_RESOLVED=claude-opus-5 >/dev/null 2>&1; set -e
+[[ -s "$broot/.collab/claude-2026-10-08-topic-r03.diagnostic.json" ]]
+PATH="$test_root/bin:$PATH" CODEX_TEST_MODE=success "$root/codex-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" \
+  "$broot/.collab/codex-2026-10-08-topic-r04.md" "$broot/packet.md" >/dev/null
+breview claude-review.sh sonnet claude-2026-10-09-topic-r05.md >/dev/null
+brefused 'escalate to gemini-review.sh' claude-review.sh sonnet claude-2026-10-09-topic-r06.md
+set +e; PATH="$test_root/bin:$PATH" CODEX_TEST_MODE=success "$root/codex-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" \
+  "$broot/.collab/codex-2026-10-09-topic-r06.md" "$broot/packet.md" >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 79 && ! -e "$broot/.collab/codex-2026-10-09-topic-r06.md" ]]
+breview gemini-review.sh pro gemini-2026-10-09-topic-r06.json >/dev/null
+brefused 'bring the open points to the user' gemini-review.sh pro gemini-2026-10-09-topic-r07.json
+breview claude-review.sh sonnet claude-2026-10-09-topic-r07.md env REVIEW_BUDGET_OVERRIDE='user approved r07' >/dev/null
+grep -Fx 'Budget override: user approved r07' "$broot/.collab/claude-2026-10-09-topic-r07.md" >/dev/null
+# One hard-tier round per topic; the routine tier still runs.
+breview claude-review.sh opus claude-2026-10-08-hardtopic-r01.md >/dev/null
+brefused 'hard-tier' claude-review.sh opus claude-2026-10-08-hardtopic-r02.md
+# A false length claim about a quoted hex value is noted in the header.
+digest=ca71fc6a71fca61d604705e0105298c4a7c52c8c2cdf22a9e25294cdddd483b1
+breview claude-review.sh sonnet claude-2026-10-08-hardtopic-r02.md env CLAUDE_MOCK_EXTRA="F1 [minor]: \`$digest\` is 63 hex characters." >/dev/null
+grep -Fx "Mechanical check: F1 says 63 characters, but the value it quotes is 64 (ca71fc6a 71fca61d 604705e0 105298c4 a7c52c8c 2cdf22a9 e25294cd ddd483b1)" \
+  "$broot/.collab/claude-2026-10-08-hardtopic-r02.md" >/dev/null
+# Seven Claude reviews and one counted failure ran here today: the next is refused.
+breview claude-review.sh sonnet claude-2026-10-08-filler-r01.md >/dev/null
+brefused 'reviews already ran in this repository today' claude-review.sh sonnet claude-2026-10-08-other-r01.md
 
 python3 - <<'PY' "$root/reviewer-validate.py"
 import subprocess

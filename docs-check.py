@@ -112,6 +112,19 @@ def verdict(path):
     return m[-1].lower() if m else None
 
 
+def budget_override(path):
+    """The REVIEW_BUDGET_OVERRIDE reason a wrapper recorded, or None."""
+    if path.suffix == ".json":
+        try:
+            return json.loads(path.read_text()).get("reviewer_metadata", {}).get("budget_override")
+        except json.JSONDecodeError:
+            return None
+    # The wrapper header is the block after the title line, before the review.
+    parts = path.read_text(errors="replace").split("\n\n", 2)
+    m = re.search(r"(?m)^Budget override: (.+)$", parts[1]) if len(parts) > 1 else None
+    return m.group(1).strip() if m else None
+
+
 def wrapper_revision(path):
     if path.suffix == ".json":
         try:
@@ -351,6 +364,9 @@ def record(repo):
             for rid in sorted(set(have) & set(expect)):
                 if have[rid]["severity"] != expect[rid]:
                     errors.append(f"{name}: row {rid} severity {have[rid]['severity']!r} != review {expect[rid]!r}")
+            # Only the user may lift the review budget (review-budget.py).
+            if budget_override(art) and not any("budget override" in e[1].lower() for e in decision_entries(ws)):
+                errors.append(f"{name}: r{rnd:02d} ran with a review budget override but no Decisions entry records the user's 'budget override' approval")
             rev = wrapper_revision(art)
             if post_adoption and rev is None:
                 errors.append(f"{name}: r{rnd:02d} has no wrapper revision (post-adoption reviews need provenance)")

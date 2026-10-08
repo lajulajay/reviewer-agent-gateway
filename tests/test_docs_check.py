@@ -247,6 +247,16 @@ class DocsCheckTest(unittest.TestCase):
         self.assertIn("r02 wrapper revision", self.record()[1])  # r02 ran newer standards than the pin
         self.assertIn("newer than, or unrelated to, the standards pin", self.record()[1])
 
+    def test_budget_override_needs_user_decision(self):
+        self.f.artifact("codex-x-r03.md", CLEAN_ACCEPT.replace("{rev}\n", "{rev}\nBudget override: user approved\n"))
+        reviews = [("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "REJECT"), ("r03", "codex-x-r03.md", "ACCEPT")]
+        self.f.workstream(GOOD_ROWS, reviews=reviews)
+        self.assertIn("r03 ran with a review budget override", self.record()[1])
+        self.f.workstream(GOOD_ROWS, reviews=reviews, decisions=(
+            '- 2026-10-03, user, scope: review rounds for x.\n  Quote: "budget override approved for r03". Supersedes: none.'))
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+
     def test_adopted_repo_needs_baseline(self):
         self.f.workstream(GOOD_ROWS)
         (self.f.repo / "docs-baseline.json").unlink()
