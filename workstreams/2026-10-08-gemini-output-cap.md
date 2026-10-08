@@ -37,12 +37,19 @@ counting against the budget because they spent real quota.
 
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
+| r01 | Codex (primary) | routine | `.collab/codex-2026-10-08-gemini-output-cap-r01.md` | REJECT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
+| R01-F1 | major | fixed: the note, README and PROTOCOL now say the link verifies nothing and the owner checks the quote against the packet | fixed |
+| R01-F2 | minor | fixed: README says one run had a complete review and the other stopped before its verdict; wrapper comment corrected | fixed |
+| R01-F3 | minor | fixed: the cutoff match is anchored to agy's full message; test for an ERROR that only mentions the limit | fixed |
 
 ## Log
 
-- 2026-10-08: implemented on branch `gemini-output-cap`; smoke tests and docs-check tests pass. Review not yet requested.
+- 2026-10-08: implemented on branch `gemini-output-cap`; smoke tests and docs-check tests pass.
+- 2026-10-08: the two kalshi-temperature-bot failure reports committed (the folder's other reports are tracked; user instruction).
+- 2026-10-08: Codex r01 REJECT (3 findings), all fixed. Review r02 pending.
+- r01: raw review compared with its rows; no unlabeled actionable item

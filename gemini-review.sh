@@ -64,7 +64,7 @@ max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
 prompt_bytes="$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')"
 [[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
 # The hard-tier model spends its output tokens on hidden reasoning over large
-# packets and returns no review (215-245 KB failed, 40 KB succeeded on
+# packets and hits its output-token limit (215-245 KB failed, 40 KB succeeded on
 # 2026-10-08). Refuse before the budget check so no round is used.
 hard_max_bytes="${GEMINI_HARD_MAX_PROMPT_BYTES:-150000}"
 [[ "$model" != "$(jq -r '.hard_model // empty' "$policy")" || "$prompt_bytes" -le "$hard_max_bytes" ]] \
@@ -101,7 +101,7 @@ agy_error="$(grep -m1 AGY_ERROR "$stderr" || true)"
 # only if it passes validation, and record the warning.
 truncation=""
 if ! jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/dev/null 2>&1; then
-  jq -e '.status == "ERROR" and ((.error // "") | test("output token limit")) and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 \
+  jq -e '.status == "ERROR" and ((.error // "") | test("^Your previous response was cut off because it exceeded the output token limit")) and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 \
     || fail 70 "Gemini invocation did not succeed"
   jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" 2>> "$stderr" \
     || fail 70 "Gemini hit the output-token limit before finishing the review; split the packet or send a delta"

@@ -97,7 +97,8 @@ if [[ "${AGY_TEST_MODE:-}" == cutoff || "${AGY_TEST_MODE:-}" == cutoff-partial ]
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
   body+=$'\nF1 [major]: see [proxy](file:///tmp/reviewers-gemini.X/workspace/proxy.ts#L3) for the redirect.\nATTESTATION: all actionable findings and conditions are labeled.\n'
   [[ "$AGY_TEST_MODE" == cutoff-partial ]] || body+=$'\nVERDICT: REJECT'
-  jq -nc --arg response "$body" '{event:"result",result:{conversation_id:"conv-test",status:"ERROR",error:"Your previous response was cut off because it exceeded the output token limit\nRetries remaining: 3",response:$response,usage:{total_tokens:1}}}'
+  err=$'Your previous response was cut off because it exceeded the output token limit\nRetries remaining: 3'
+  jq -nc --arg response "$body" --arg err "${AGY_MOCK_ERROR:-$err}" '{event:"result",result:{conversation_id:"conv-test",status:"ERROR",error:$err,response:$response,usage:{total_tokens:1}}}'
   exit 0
 fi
 exit 42
@@ -278,6 +279,9 @@ jq -e '.status == "ERROR" and (.reviewer_metadata.truncation_warning | test("out
   "$GEMINI_OUT_ROOT/.collab/gemini-cutoff.json" >/dev/null
 jq -e '.reviewer_metadata | has("truncation_warning") | not' "$test_root/.collab/gemini-hard.json" >/dev/null
 gemini_fails 70 gemini-cutoff-partial.json env AGY_TEST_MODE=cutoff-partial
+# Another ERROR that only mentions the limit is not treated as a cutoff.
+gemini_fails 70 gemini-cutoff-other.json env AGY_TEST_MODE=cutoff AGY_MOCK_ERROR="quota check: output token limit unavailable"
+jq -e '.reason == "Gemini invocation did not succeed"' "$GEMINI_OUT_ROOT/.collab/gemini-cutoff-other.diagnostic.json" >/dev/null
 jq -e '.reason | startswith("Gemini hit the output-token limit")' "$GEMINI_OUT_ROOT/.collab/gemini-cutoff-partial.diagnostic.json" >/dev/null
 # Hard-tier packets over the size guard are refused before agy runs; routine
 # packets of the same size are not.

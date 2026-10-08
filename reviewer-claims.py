@@ -11,8 +11,9 @@ a correct finding about a truncated value. The owner reads the finding with
 the note and decides; the wrapper records the note so that needs no round.
 
 A line that cites a file:// path also gets a note. Reviewers have no file
-access, so such a citation means the quoted code came from the model, not a
-file: Gemini linked an invented proxy.ts into its empty sandbox on 2026-10-08.
+access, so the link was not read and does not show where quoted code came
+from; on 2026-10-08 Gemini linked into its empty sandbox while quoting
+proxy.ts code that was not in the packet.
 """
 
 import re
@@ -29,7 +30,7 @@ def notes(text):
         label = re.match(r"^\W*(F\d+|C\d+)", line)
         where = label.group(1) if label else "a review line"
         for uri in FILE_URI.findall(line):
-            out.append(f"{where} cites {uri}; the reviewer had no file access, so check the quoted code against the packet")
+            out.append(f"{where} cites {uri}; the reviewer had no file access, so the link does not verify the quoted code; check it against the packet")
         values = HEX.findall(line)
         if not values:
             continue

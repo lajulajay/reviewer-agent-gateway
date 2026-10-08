@@ -161,8 +161,9 @@ dropped on 2026-10-08: `agy` 1.3.1 warns it has no effect with slash commands
 disabled, and the deny-all hook already blocks every tool.)
 
 The hard-tier model spends its output tokens on hidden reasoning when the
-packet is large: on 2026-10-08 two runs with 215-245 KB packets returned no
-complete review, while 40 KB packets succeeded. Hard-tier calls are therefore
+packet is large: on 2026-10-08 two runs with 215-245 KB packets hit the
+output-token limit (one had written a complete review, the other stopped
+before its verdict), while 40 KB packets succeeded. Hard-tier calls are therefore
 refused above `GEMINI_HARD_MAX_PROMPT_BYTES` (default 150000), before the
 budget check, so the refusal uses no round. When `agy` reports the
 output-token limit (`status: "ERROR"`), the wrapper keeps the returned review
@@ -203,8 +204,8 @@ turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
 artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
 `Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
 when a review says a quoted hex value has a length it does not have, or cites
-a `file://` path (reviewers have no file access, so the quoted code did not
-come from a file). `reviewer-validate.py` refuses a finding labeled with a
+a `file://` path (reviewers have no file access, so the link does not verify
+any quoted code; the owner checks the quote against the packet). `reviewer-validate.py` refuses a finding labeled with a
 severity other than `blocker`, `major` or `minor`, which would otherwise go
 untracked.
 

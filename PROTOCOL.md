@@ -104,8 +104,8 @@ evidence. A finding that a script or test disproves is dispositioned
 `rejected:` with that evidence; it does not justify another round. A
 `Mechanical check` line gives a quoted value's measured length, not a
 verdict: the owner reads the finding to see which number it claims for the
-value. A note that a finding cites a `file://` path means the quoted code did
-not come from a file; the owner checks it against the packet before acting.
+value. A note that a finding cites a `file://` path means the link verifies
+nothing; the owner checks any quoted code against the packet before acting.
 
 ## Packets and isolation
 
