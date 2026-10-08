@@ -32,6 +32,9 @@ header; output-contract and packet rules against character counting;
 - 2026-10-08, user, scope: who decides after the Gemini escalation.
   Quote: "by then owner, i meant me not the repo owner". Supersedes: the owner-agent reading of the first decision.
 
+- 2026-10-08, user, scope: Gemini escalation rounds.
+  Quote: "yes make the change then push" (to allowing two Gemini rounds, an assessment and a fix check, before the user). Supersedes: one Gemini round.
+
 ## Reviews
 
 | Round | Reviewer | Tier | Artifact | Verdict |
@@ -70,3 +73,4 @@ header; output-contract and packet rules against character counting;
 - r01: raw review compared with its rows; no unlabeled actionable item
 - r02: raw review compared with its rows; no unlabeled actionable item
 - 2026-10-08: Gemini r02 ACCEPT, all r01 items resolved. Merged to main.
+- 2026-10-08: Gemini escalation raised to two rounds (user decision); config-only change, not sent for review.

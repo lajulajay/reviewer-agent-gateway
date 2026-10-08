@@ -384,9 +384,10 @@ set +e; PATH="$test_root/bin:$PATH" CODEX_TEST_MODE=success "$root/codex-review.
   "$broot/.collab/codex-$today-topic-r06.md" "$broot/packet.md" >/dev/null 2>&1; code=$?; set -e
 [[ $code -eq 79 && ! -e "$broot/.collab/codex-$today-topic-r06.md" ]]
 breview gemini-review.sh pro gemini-$today-topic-r06.json >/dev/null
-brefused 'bring the open points to the user' gemini-review.sh pro gemini-$today-topic-r07.json
-breview claude-review.sh sonnet claude-$today-topic-r07.md env REVIEW_BUDGET_OVERRIDE='user approved r07' >/dev/null
-grep -Fx 'Budget override: user approved r07' "$broot/.collab/claude-$today-topic-r07.md" >/dev/null
+breview gemini-review.sh pro gemini-$today-topic-r07.json >/dev/null
+brefused 'bring the open points to the user' gemini-review.sh pro gemini-$today-topic-r08.json
+breview claude-review.sh sonnet claude-$today-topic-r08.md env REVIEW_BUDGET_OVERRIDE='user approved r08' >/dev/null
+grep -Fx 'Budget override: user approved r08' "$broot/.collab/claude-$today-topic-r08.md" >/dev/null
 # One hard-tier round per topic; the routine tier still runs.
 breview claude-review.sh opus claude-$today-hardtopic-r01.md >/dev/null
 brefused 'hard-tier' claude-review.sh opus claude-$today-hardtopic-r02.md

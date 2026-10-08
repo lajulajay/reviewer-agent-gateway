@@ -1,7 +1,7 @@
 {
   "max_rounds_per_topic": 5,
   "escalation_provider": "gemini",
-  "escalation_rounds": 1,
+  "escalation_rounds": 2,
   "max_hard_rounds_per_topic": 1,
   "max_reviews_per_provider_per_day": 8,
   "claude_effort": {"first_round": "medium", "follow_up": "low"}

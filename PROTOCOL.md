@@ -81,10 +81,11 @@ Every review call spends the user's plan usage, so the wrappers enforce
 - **Five rounds per topic, then Gemini, then the user.** The topic is the
   output name without provider, date, and `-rNN`; rounds from every provider
   count together, including failed calls that reached the model. After five,
-  only `gemini-review.sh` may run, once. After that the owner brings the open
-  points to the user in one packet, as in the disagreement escalation above:
-  the competing claims, the evidence, Gemini's assessment, and the exact
-  decision needed. No further review runs unless the user approves an
+  only `gemini-review.sh` may run, at most twice: an assessment and, if the
+  owner fixes what it finds, a check of those fixes. After that the owner
+  brings the open points to the user in one packet, as in the disagreement
+  escalation above: the competing claims, the evidence, Gemini's assessment,
+  and the exact decision needed. No further review runs unless the user approves an
   override.
 - **One hard-tier round per topic** (`opus` or Codex `hard`); use it where it
   matters most.
