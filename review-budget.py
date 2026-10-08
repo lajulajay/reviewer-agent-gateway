@@ -29,7 +29,7 @@ PROVIDERS = ("claude", "codex", "gemini", "kimi")
 NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
 # Failed calls in which the model ran and used quota. "invocation failed" is
 # not counted: it includes calls refused at a usage limit before any work.
-SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed")
+SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed|output-token limit")
 
 
 def parse(name):

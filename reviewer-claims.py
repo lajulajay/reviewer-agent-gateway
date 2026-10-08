@@ -9,24 +9,31 @@ hex length the line states and the value's measured length. The note does not
 say which number refers to the value: "is 62 hex characters, expected 64" is
 a correct finding about a truncated value. The owner reads the finding with
 the note and decides; the wrapper records the note so that needs no round.
+
+A line that cites a file:// path also gets a note. Reviewers have no file
+access, so the link was not read and does not show where quoted code came
+from; on 2026-10-08 Gemini linked into its empty sandbox while quoting
+proxy.ts code that was not in the packet.
 """
 
 import re
 import sys
 
 HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{32,}(?![0-9A-Za-z])")
+FILE_URI = re.compile(r"file://[^\s)\]>`'\"]+")
 CLAIM = re.compile(r"(?i)\b(\d{2,3})[\s-]*(?:hexadecimal|hex)[\s-]+(?:characters?|chars?|digits?)\b")
 
 
 def notes(text):
     out = []
     for line in text.splitlines():
+        label = re.match(r"^\W*(F\d+|C\d+)", line)
+        where = label.group(1) if label else "a review line"
+        for uri in FILE_URI.findall(line):
+            out.append(f"{where} cites {uri}; the reviewer had no file access, so the link does not verify the quoted code; check it against the packet")
         values = HEX.findall(line)
         if not values:
             continue
-        lengths = {len(v) for v in values}
-        label = re.match(r"^\W*(F\d+|C\d+)", line)
-        where = label.group(1) if label else "a review line"
         claims = sorted({int(m.group(1)) for m in CLAIM.finditer(line)})
         for v in values:
             if any(n != len(v) and abs(len(v) - n) <= 3 for n in claims):

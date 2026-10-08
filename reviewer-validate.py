@@ -41,6 +41,12 @@ verdict = matches[0].group(1).lower()
 FINDING = re.compile(r"(?m)^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
 CONDITION = re.compile(r"(?m)^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
 ATTESTATION = re.compile(r"(?im)^\s*\**\s*attestation\s*\**\s*:\s*all actionable findings and conditions are labeled\.?\s*\**\s*$")
+# A label with any other severity would not count as a finding, and nothing
+# would track it (Gemini's "F1 [critical]", 2026-10-08), so it is refused.
+for m in re.finditer(r"(?m)^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[([^\]\n]*)\]", text):
+    if m.group(2) not in ("blocker", "major", "minor"):
+        print(f"finding F{m.group(1)} has severity [{m.group(2)}]; use blocker, major or minor", file=sys.stderr)
+        raise SystemExit(1)
 findings = [int(m.group(1)) for m in FINDING.finditer(text)]
 conditions = [int(m.group(1)) for m in CONDITION.finditer(text)]
 if not ATTESTATION.search(text):

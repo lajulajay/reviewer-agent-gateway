@@ -155,8 +155,22 @@ permission allows, and blocks tools if the hook script itself fails. The
 prompt and packet are therefore inlined into the prompt argument (`agy -p`
 ignores stdin), capped at `GEMINI_MAX_PROMPT_BYTES` (default 800000). Denied
 tool attempts are recorded in `reviewer_metadata.denied_tool_calls`. Slash
-commands and skill expansion are disabled, the call runs with `--mode plan
---sandbox`, and Google credential variables are removed before launch.
+commands and skill expansion are disabled, the call runs with `--sandbox`,
+and Google credential variables are removed before launch. (`--mode plan` was
+dropped on 2026-10-08: `agy` 1.3.1 warns it has no effect with slash commands
+disabled, and the deny-all hook already blocks every tool.)
+
+The hard-tier model spends its output tokens on hidden reasoning when the
+packet is large: on 2026-10-08 two runs with 215-245 KB packets hit the
+output-token limit (one had written a complete review, the other stopped
+before its verdict), while 40 KB packets succeeded. Hard-tier calls are therefore
+refused above `GEMINI_HARD_MAX_PROMPT_BYTES` (default 150000), before the
+budget check, so the refusal uses no round. When `agy` reports the
+output-token limit (`status: "ERROR"`), the wrapper keeps the returned review
+only if it passes `reviewer-validate.py` and records
+`reviewer_metadata.truncation_warning`; otherwise it fails with "Gemini hit
+the output-token limit before finishing the review", which counts as a round
+because the quota was spent.
 
 `agy` reports the session model only in its `stream-json` init event; the
 wrapper requires it to equal the selected ID. That is the configured session
@@ -180,7 +194,7 @@ Packets must still exclude secrets; the private-path rules above apply.
 before the model call and applies `review-budget.json`; the rules are in
 [PROTOCOL.md](PROTOCOL.md#review-budget). It counts the topic's artifacts in
 `.collab/`, plus diagnostics for failed calls that reached the model, and
-counts the daily cap by file modification date. Changing the limits is a
+counts the daily cap by the date in the output name. Changing the limits is a
 committed change to `review-budget.json`; the wrappers refuse to run with it
 uncommitted.
 
@@ -189,7 +203,11 @@ Artifacts record what each call used: the Claude header has `Effort:` and
 turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
 artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
 `Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
-when a review says a quoted hex value has a length it does not have.
+when a review says a quoted hex value has a length it does not have, or cites
+a `file://` path (reviewers have no file access, so the link does not verify
+any quoted code; the owner checks the quote against the packet). `reviewer-validate.py` refuses a finding labeled with a
+severity other than `blocker`, `major` or `minor`, which would otherwise go
+untracked.
 
 Run provider-free regression checks with:
 
