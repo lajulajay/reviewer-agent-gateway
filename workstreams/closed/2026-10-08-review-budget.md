@@ -5,7 +5,7 @@ Owner: Claude (2026-10-08, assigned by the user)
 Status: done (2026-10-08)
 Branch: review-budget (merged to main)
 Operational: no
-Links: [failure report](../invocation-failures/kalshi-temperature-bot-2026-10-07-h5-sha256-review-errors.md), [protocol](../PROTOCOL.md#review-budget)
+Links: [failure report](../../invocation-failures/kalshi-temperature-bot-2026-10-07-h5-sha256-review-errors.md), [protocol](../../PROTOCOL.md#review-budget)
 
 ## Brief
 
