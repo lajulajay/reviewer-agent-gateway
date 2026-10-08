@@ -1,0 +1,252 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index 97c4e91..a273a56 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -104,7 +104,8 @@ evidence. A finding that a script or test disproves is dispositioned
+ `rejected:` with that evidence; it does not justify another round. A
+ `Mechanical check` line gives a quoted value's measured length, not a
+ verdict: the owner reads the finding to see which number it claims for the
+-value.
++value. A note that a finding cites a `file://` path means the quoted code did
++not come from a file; the owner checks it against the packet before acting.
+ 
+ ## Packets and isolation
+ 
+@@ -120,6 +121,9 @@ value.
+   8-character groups next to a script-produced length (e.g.
+   `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
+   check the reviewer cannot run.
++- Keep hard-tier Gemini packets small: send the delta and the targeted
++  context, not full source. Above about 150 KB the hard model runs out of
++  output tokens before it writes the review, and the wrapper refuses it.
+ - Never include `.env` files, credentials, keys, production data, private or
+   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
+ 
+diff --git a/README.md b/README.md
+index 8723ad9..b5937d4 100644
+--- a/README.md
++++ b/README.md
+@@ -155,8 +155,21 @@ permission allows, and blocks tools if the hook script itself fails. The
+ prompt and packet are therefore inlined into the prompt argument (`agy -p`
+ ignores stdin), capped at `GEMINI_MAX_PROMPT_BYTES` (default 800000). Denied
+ tool attempts are recorded in `reviewer_metadata.denied_tool_calls`. Slash
+-commands and skill expansion are disabled, the call runs with `--mode plan
+---sandbox`, and Google credential variables are removed before launch.
++commands and skill expansion are disabled, the call runs with `--sandbox`,
++and Google credential variables are removed before launch. (`--mode plan` was
++dropped on 2026-10-08: `agy` 1.3.1 warns it has no effect with slash commands
++disabled, and the deny-all hook already blocks every tool.)
++
++The hard-tier model spends its output tokens on hidden reasoning when the
++packet is large: on 2026-10-08 two runs with 215-245 KB packets returned no
++complete review, while 40 KB packets succeeded. Hard-tier calls are therefore
++refused above `GEMINI_HARD_MAX_PROMPT_BYTES` (default 150000), before the
++budget check, so the refusal uses no round. When `agy` reports the
++output-token limit (`status: "ERROR"`), the wrapper keeps the returned review
++only if it passes `reviewer-validate.py` and records
++`reviewer_metadata.truncation_warning`; otherwise it fails with "Gemini hit
++the output-token limit before finishing the review", which counts as a round
++because the quota was spent.
+ 
+ `agy` reports the session model only in its `stream-json` init event; the
+ wrapper requires it to equal the selected ID. That is the configured session
+@@ -180,7 +193,7 @@ Packets must still exclude secrets; the private-path rules above apply.
+ before the model call and applies `review-budget.json`; the rules are in
+ [PROTOCOL.md](PROTOCOL.md#review-budget). It counts the topic's artifacts in
+ `.collab/`, plus diagnostics for failed calls that reached the model, and
+-counts the daily cap by file modification date. Changing the limits is a
++counts the daily cap by the date in the output name. Changing the limits is a
+ committed change to `review-budget.json`; the wrappers refuse to run with it
+ uncommitted.
+ 
+@@ -189,7 +202,11 @@ Artifacts record what each call used: the Claude header has `Effort:` and
+ turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
+ artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
+ `Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
+-when a review says a quoted hex value has a length it does not have.
++when a review says a quoted hex value has a length it does not have, or cites
++a `file://` path (reviewers have no file access, so the quoted code did not
++come from a file). `reviewer-validate.py` refuses a finding labeled with a
++severity other than `blocker`, `major` or `minor`, which would otherwise go
++untracked.
+ 
+ Run provider-free regression checks with:
+ 
+diff --git a/gemini-review.sh b/gemini-review.sh
+index b624aec..216fdff 100755
+--- a/gemini-review.sh
++++ b/gemini-review.sh
+@@ -61,7 +61,14 @@ TOOLS: None are available; every tool call is denied. Review only the text above
+ 
+ $(<"$(dirname "$0")/output-contract.txt")"
+ max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
+-[[ "$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
++prompt_bytes="$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')"
++[[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
++# The hard-tier model spends its output tokens on hidden reasoning over large
++# packets and returns no review (215-245 KB failed, 40 KB succeeded on
++# 2026-10-08). Refuse before the budget check so no round is used.
++hard_max_bytes="${GEMINI_HARD_MAX_PROMPT_BYTES:-150000}"
++[[ "$model" != "$(jq -r '.hard_model // empty' "$policy")" || "$prompt_bytes" -le "$hard_max_bytes" ]] \
++  || fail 65 "hard-tier prompt and packet are $prompt_bytes bytes, over $hard_max_bytes: split the packet or send a delta"
+ run_agy() { (cd "$workspace" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_GENAI_USE_VERTEXAI -u GOOGLE_GENAI_USE_GCA -u GOOGLE_CLOUD_PROJECT "$@"); }
+ # Gemini tiers are not capped per topic: Gemini is the escalation reviewer.
+ budget="$(python3 "$(dirname "$0")/review-budget.py" gemini routine "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+@@ -81,7 +88,7 @@ grace_seconds="${GEMINI_TIMEOUT_GRACE_SECONDS:-30}"
+ [[ "$grace_seconds" == <-> && "$grace_seconds" -ge 1 ]] || fail 64 "GEMINI_TIMEOUT_GRACE_SECONDS must be a positive integer"
+ # --print-timeout is agy's own limit; the alarm is a backstop if agy hangs.
+ set +e
+-run_agy perl -e 'alarm($ARGV[0]); shift; exec @ARGV' "$((timeout_seconds + grace_seconds))" agy -p "$prompt_text" --model "$model" --mode plan --sandbox --disable-slash-commands --output-format stream-json --print-timeout "${timeout_seconds}s" > "$response" 2>> "$stderr"
++run_agy perl -e 'alarm($ARGV[0]); shift; exec @ARGV' "$((timeout_seconds + grace_seconds))" agy -p "$prompt_text" --model "$model" --sandbox --disable-slash-commands --output-format stream-json --print-timeout "${timeout_seconds}s" > "$response" 2>> "$stderr"
+ code=$?; set -e
+ [[ $code -ne 142 ]] || fail 70 "Gemini invocation timed out"
+ [[ -s "$response" ]] || fail 70 "Gemini invocation failed or returned empty output"
+@@ -89,13 +96,23 @@ result="$(jq -c 'select(.event == "result") | .result' "$response" 2>/dev/null |
+ # Model or agent errors exit 3 with an AGY_ERROR line on stderr.
+ agy_error="$(grep -m1 AGY_ERROR "$stderr" || true)"
+ [[ $code -eq 0 && -n "$result" ]] || fail 70 "Gemini invocation failed (exit $code)${agy_error:+: $agy_error}"
+-jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 || fail 70 "Gemini invocation did not succeed"
++# A run that hits the output-token limit ends as ERROR even when the review it
++# returned is complete (hidden reasoning used the tokens; 2026-10-08). Keep it
++# only if it passes validation, and record the warning.
++truncation=""
++if ! jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/dev/null 2>&1; then
++  jq -e '.status == "ERROR" and ((.error // "") | test("output token limit")) and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 \
++    || fail 70 "Gemini invocation did not succeed"
++  jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" 2>> "$stderr" \
++    || fail 70 "Gemini hit the output-token limit before finishing the review; split the packet or send a delta"
++  truncation="agy reported the output-token limit; the returned review passed validation and was kept"
++fi
+ # agy reports the session model only in the stream's init event.
+ resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response" | sort -u | paste -sd, -)"; [[ -n "$resolved" ]] || fail 74 "Gemini returned no resolved model metadata"
+ [[ "$resolved" == "$model" ]] || fail 74 "Gemini resolved outside selected model"
+ jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
+ checks="$(jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-claims.py" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+ denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
+-jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" \
+-  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
++jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" --arg truncation "$truncation" \
++  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end) + (if $truncation == "" then {} else {truncation_warning:$truncation} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+ chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"
+diff --git a/review-budget.py b/review-budget.py
+index 397d1ca..65d1538 100755
+--- a/review-budget.py
++++ b/review-budget.py
+@@ -29,7 +29,7 @@ PROVIDERS = ("claude", "codex", "gemini", "kimi")
+ NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
+ # Failed calls in which the model ran and used quota. "invocation failed" is
+ # not counted: it includes calls refused at a usage limit before any work.
+-SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed")
++SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed|output-token limit")
+ 
+ 
+ def parse(name):
+diff --git a/reviewer-claims.py b/reviewer-claims.py
+index c7097e8..8c0fcad 100755
+--- a/reviewer-claims.py
++++ b/reviewer-claims.py
+@@ -9,24 +9,30 @@ hex length the line states and the value's measured length. The note does not
+ say which number refers to the value: "is 62 hex characters, expected 64" is
+ a correct finding about a truncated value. The owner reads the finding with
+ the note and decides; the wrapper records the note so that needs no round.
++
++A line that cites a file:// path also gets a note. Reviewers have no file
++access, so such a citation means the quoted code came from the model, not a
++file: Gemini linked an invented proxy.ts into its empty sandbox on 2026-10-08.
+ """
+ 
+ import re
+ import sys
+ 
+ HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{32,}(?![0-9A-Za-z])")
++FILE_URI = re.compile(r"file://[^\s)\]>`'\"]+")
+ CLAIM = re.compile(r"(?i)\b(\d{2,3})[\s-]*(?:hexadecimal|hex)[\s-]+(?:characters?|chars?|digits?)\b")
+ 
+ 
+ def notes(text):
+     out = []
+     for line in text.splitlines():
++        label = re.match(r"^\W*(F\d+|C\d+)", line)
++        where = label.group(1) if label else "a review line"
++        for uri in FILE_URI.findall(line):
++            out.append(f"{where} cites {uri}; the reviewer had no file access, so check the quoted code against the packet")
+         values = HEX.findall(line)
+         if not values:
+             continue
+-        lengths = {len(v) for v in values}
+-        label = re.match(r"^\W*(F\d+|C\d+)", line)
+-        where = label.group(1) if label else "a review line"
+         claims = sorted({int(m.group(1)) for m in CLAIM.finditer(line)})
+         for v in values:
+             if any(n != len(v) and abs(len(v) - n) <= 3 for n in claims):
+diff --git a/reviewer-validate.py b/reviewer-validate.py
+index cefd2b9..de56f8a 100755
+--- a/reviewer-validate.py
++++ b/reviewer-validate.py
+@@ -41,6 +41,12 @@ verdict = matches[0].group(1).lower()
+ FINDING = re.compile(r"(?m)^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
+ CONDITION = re.compile(r"(?m)^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
+ ATTESTATION = re.compile(r"(?im)^\s*\**\s*attestation\s*\**\s*:\s*all actionable findings and conditions are labeled\.?\s*\**\s*$")
++# A label with any other severity would not count as a finding, and nothing
++# would track it (Gemini's "F1 [critical]", 2026-10-08), so it is refused.
++for m in re.finditer(r"(?m)^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[([^\]\n]*)\]", text):
++    if m.group(2) not in ("blocker", "major", "minor"):
++        print(f"finding F{m.group(1)} has severity [{m.group(2)}]; use blocker, major or minor", file=sys.stderr)
++        raise SystemExit(1)
+ findings = [int(m.group(1)) for m in FINDING.finditer(text)]
+ conditions = [int(m.group(1)) for m in CONDITION.finditer(text)]
+ if not ATTESTATION.search(text):
+diff --git a/workstreams/2026-10-08-gemini-output-cap.md b/workstreams/2026-10-08-gemini-output-cap.md
+new file mode 100644
+index 0000000..246c300
+--- /dev/null
++++ b/workstreams/2026-10-08-gemini-output-cap.md
+@@ -0,0 +1,48 @@
++# Gemini output-token cap
++
++Workstream: 2026-10-08-gemini-output-cap
++Owner: Claude (2026-10-08, assigned by the user)
++Status: active
++Branch: gemini-output-cap
++Operational: no
++Links: [failure report](../invocation-failures/kalshi-temperature-bot-2026-10-08-h5-paper-gemini-output-cap.md), [protocol](../PROTOCOL.md#packets-and-isolation)
++
++## Brief
++
++On 2026-10-08 two hard-tier Gemini reviews of the H5 paper implementation in
++`kalshi-temperature-bot` (r02, r06; 216k-227k input tokens) failed with exit
++70: hidden reasoning used the output-token limit (65k-70k thinking tokens) and
++`agy` returned `status: "ERROR"`. r06's returned review was complete and
++valid; r02's stopped before its verdict (the report says both were complete;
++r02 was not). The report also says the validator would have rejected r06's
++`F1 [critical]`; it did not: findings with an unknown severity were ignored,
++so Gemini's two most severe findings went untracked.
++
++Change: `reviewer-validate.py` refuses unknown severities; `gemini-review.sh`
++keeps a cut-off review only if it validates (recording
++`truncation_warning`) and otherwise fails with its own reason, which the
++budget counts; hard-tier packets over `GEMINI_HARD_MAX_PROMPT_BYTES` (150000)
++are refused before the budget check; `--mode plan` dropped (no effect, warned
++on every run); `reviewer-claims.py` notes `file://` citations, which mark
++invented code. Report recommendations not taken: no `agy` thinking-budget
++control exists (`--continue` would spend more quota), and cut-off runs keep
++counting against the budget because they spent real quota.
++
++## Decisions
++
++- 2026-10-08, user, scope: fixes for the Gemini output-cap report.
++  Quote: "approved" (to the validator fix, recommendations 1, 2 and 5, and the `file://` check). Supersedes: none.
++
++## Reviews
++
++| Round | Reviewer | Tier | Artifact | Verdict |
++| :--- | :--- | :--- | :--- | :--- |
++
++## Findings and conditions
++
++| ID | Severity | Disposition | Status |
++| :--- | :--- | :--- | :--- |
++
++## Log
++
++- 2026-10-08: implemented on branch `gemini-output-cap`; smoke tests and docs-check tests pass. Review not yet requested.
