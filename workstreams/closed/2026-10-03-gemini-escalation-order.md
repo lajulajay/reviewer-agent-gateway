@@ -2,10 +2,20 @@
 
 Workstream: 2026-10-03-gemini-escalation-order
 Owner: Claude (2026-10-03, assigned by the user at efc1333)
-Status: active
+Status: done (2026-10-03)
 Branch: main (gateway); repository branches listed below
 Operational: no
-Links: [canonical protocol](../PROTOCOL.md)
+Links: [canonical protocol](../../PROTOCOL.md)
+
+## Outcome
+
+Done 2026-10-03. `PROTOCOL.md` (47f6d27) requires a Gemini review before a
+decision-material Codex/Claude disagreement reaches the user, unless Gemini
+is unavailable. Repository `AGENTS.md` wording points to it and pins
+47f6d27: trading-strategies 01f9bd8, polymarket-temperature-bot cec4223
+(feature branch) and dc740cf (`main`), kalshi-temperature-bot 07ea262 (H5
+branch). Finance and econ follow the canonical rule without edits. Two Codex
+rounds; 4 items, all verified in r02.
 
 ## Brief
 
@@ -50,15 +60,16 @@ Documentation only; pushes deploy nothing in the touched repositories.
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Codex | routine (gpt-6-sol, medium) | `.collab/codex-2026-10-03-gemini-escalation-order-r01.md` | ACCEPT WITH CONDITIONS |
+| r02 | Codex | routine (gpt-6-sol, medium) | `.collab/codex-2026-10-03-gemini-escalation-order-r02.md` | ACCEPT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | | open |
-| R01-F2 | major | | open |
-| R01-C1 | condition | | open |
-| R01-C2 | condition | | open |
+| R01-F1 | major | verified r02 | closed |
+| R01-F2 | major | verified r02 | closed |
+| R01-C1 | condition | verified r02 | closed |
+| R01-C2 | condition | verified r02 | closed |
 
 ## Log
 
@@ -71,3 +82,6 @@ Documentation only; pushes deploy nothing in the touched repositories.
   receives that diff. F2/C2: the brief now states that `PROTOCOL.md` governs
   every repository immediately and that pins only bound review provenance.
 - r01: raw review compared with its rows; no unlabeled actionable item
+- 2026-10-03: r02 Codex ACCEPT: all four r01 items verified. Repository
+  commits made; docs-check done passed; closed.
+- r02: raw review compared with its rows; no unlabeled actionable item
