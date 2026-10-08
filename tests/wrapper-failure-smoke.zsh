@@ -74,7 +74,7 @@ fi
 # Every review call must be isolated: plan quota, pinned version, deny-all hook.
 [[ -z "${GEMINI_API_KEY:-}" && "${AGY_CLI_DISABLE_AUTO_UPDATE:-}" == 1 && -x .agents/deny-tools.sh ]] || exit 77
 jq -e '."reviewer-isolation".PreToolUse[0].matcher == "*"' .agents/hooks.json >/dev/null || exit 77
-[[ " $* " == *" --sandbox "* && " $* " == *" --mode plan "* && " $* " == *" --disable-slash-commands "* ]] || exit 77
+[[ " $* " == *" --sandbox "* && " $* " != *" --mode "* && " $* " == *" --disable-slash-commands "* ]] || exit 77
 model=""; args=("$@")
 for i in {1..$#args}; do [[ "${args[$i]}" != --model ]] || model="${args[$((i+1))]}"; done
 [[ "${AGY_TEST_MODE:-}" != hang ]] || sleep 30
@@ -89,6 +89,15 @@ if [[ "${AGY_TEST_MODE:-}" == success || "${AGY_TEST_MODE:-}" == tool ]]; then
   for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
   body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
   jq -nc --arg response "$body" '{event:"result",result:{conversation_id:"conv-test",status:"SUCCESS",response:$response,usage:{total_tokens:1}}}'
+  exit 0
+fi
+# Output-token cutoff: agy exits 0 with status ERROR and whatever was written.
+if [[ "${AGY_TEST_MODE:-}" == cutoff || "${AGY_TEST_MODE:-}" == cutoff-partial ]]; then
+  body=""
+  for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
+  body+=$'\nF1 [major]: see [proxy](file:///tmp/reviewers-gemini.X/workspace/proxy.ts#L3) for the redirect.\nATTESTATION: all actionable findings and conditions are labeled.\n'
+  [[ "$AGY_TEST_MODE" == cutoff-partial ]] || body+=$'\nVERDICT: REJECT'
+  jq -nc --arg response "$body" '{event:"result",result:{conversation_id:"conv-test",status:"ERROR",error:"Your previous response was cut off because it exceeded the output token limit\nRetries remaining: 3",response:$response,usage:{total_tokens:1}}}'
   exit 0
 fi
 exit 42
@@ -214,15 +223,16 @@ set -e
 
 # Gemini (agy) policy pins both tiers, inlines the packet, and records metadata.
 agy_marker="$test_root/agy-marker"
+# GEMINI_OUT_ROOT puts the outputs in another repository, away from the daily cap.
 gemini() {
   local output="$1"; shift
-  PATH="$test_root/bin:$PATH" AGY_MOCK_MARKER="$agy_marker" "$@" "$root/gemini-review.sh" \
-    "${GEMINI_MODEL:-pro}" "$test_root/prompt.md" "$test_root/.collab/$output" "$test_root/packet/source.md"
+  PATH="$test_root/bin:$PATH" AGY_MOCK_MARKER="$agy_marker" "$@" "$root/gemini-review.sh" --packet-root "$test_root" \
+    "${GEMINI_MODEL:-pro}" "$test_root/prompt.md" "${GEMINI_OUT_ROOT:-$test_root}/.collab/$output" "$test_root/packet/source.md"
 }
 gemini_fails() {
-  local expected="$1" output="$2"; shift 2
+  local expected="$1" output="$2" out="${GEMINI_OUT_ROOT:-$test_root}/.collab"; shift 2
   set +e; gemini "$output" "$@" >/dev/null 2>&1; local code=$?; set -e
-  [[ $code -eq $expected && -s "$test_root/.collab/${output%.json}.diagnostic.json" && ! -e "$test_root/.collab/$output" ]] \
+  [[ $code -eq $expected && -s "$out/${output%.json}.diagnostic.json" && ! -e "$out/$output" ]] \
     || { print -u2 "gemini $output: expected exit $expected, got $code"; exit 1; }
 }
 : > "$agy_marker"
@@ -259,6 +269,24 @@ gemini_fails 65 gemini-oversize.json env AGY_TEST_MODE=success GEMINI_MAX_PROMPT
 gemini_fails 78 gemini-low-quota.json env AGY_TEST_MODE=success AGY_MOCK_QUOTA=0.1
 [[ ! -s "$agy_marker" ]] || { print -u2 "agy review ran despite low quota"; exit 1; }
 
+export GEMINI_OUT_ROOT="$test_root/cutoff"; mkdir -p "$GEMINI_OUT_ROOT/.collab"
+# A cut-off run whose review is complete is kept with a warning; one whose
+# review is incomplete fails with its own reason.
+gemini gemini-cutoff.json env AGY_TEST_MODE=cutoff >/dev/null
+jq -e '.status == "ERROR" and (.reviewer_metadata.truncation_warning | test("output-token limit"))
+  and (.reviewer_metadata.mechanical_checks | length == 1 and (.[0] | startswith("F1 cites file:///tmp/reviewers-gemini.X/workspace/proxy.ts#L3")))' \
+  "$GEMINI_OUT_ROOT/.collab/gemini-cutoff.json" >/dev/null
+jq -e '.reviewer_metadata | has("truncation_warning") | not' "$test_root/.collab/gemini-hard.json" >/dev/null
+gemini_fails 70 gemini-cutoff-partial.json env AGY_TEST_MODE=cutoff-partial
+jq -e '.reason | startswith("Gemini hit the output-token limit")' "$GEMINI_OUT_ROOT/.collab/gemini-cutoff-partial.diagnostic.json" >/dev/null
+# Hard-tier packets over the size guard are refused before agy runs; routine
+# packets of the same size are not.
+: > "$agy_marker"
+gemini_fails 65 gemini-hard-oversize.json env AGY_TEST_MODE=success GEMINI_HARD_MAX_PROMPT_BYTES=10
+[[ ! -s "$agy_marker" ]] || { print -u2 "agy ran despite the hard-tier size guard"; exit 1; }
+jq -e '.reason | startswith("hard-tier prompt and packet are")' "$GEMINI_OUT_ROOT/.collab/gemini-hard-oversize.diagnostic.json" >/dev/null
+GEMINI_MODEL=flash gemini gemini-routine-big.json env AGY_TEST_MODE=success GEMINI_HARD_MAX_PROMPT_BYTES=10 >/dev/null
+unset GEMINI_OUT_ROOT
 gemini_fails 70 gemini-timeout.json env AGY_TEST_MODE=hang GEMINI_MAX_TIME_SECONDS=1 GEMINI_TIMEOUT_GRACE_SECONDS=1
 jq -e '.reason == "Gemini invocation timed out"' "$test_root/.collab/gemini-timeout.diagnostic.json" >/dev/null
 
@@ -412,6 +440,10 @@ grep -F -- '--effort medium' "$claude_args" >/dev/null
 # A hard-tier call that reached the model and failed still uses the hard round.
 set +e; breview claude-review.sh opus claude-$today-hardfail-r01.md env CLAUDE_MOCK_RESOLVED=claude-opus-5 >/dev/null 2>&1; set -e
 brefused 'hard-tier' claude-review.sh opus claude-$today-hardfail-r02.md
+# A Gemini run cut off at the output-token limit used quota, so it counts.
+jq -n '{provider:"gemini",exit_code:70,reason:"Gemini hit the output-token limit before finishing the review; split the packet or send a delta"}' \
+  > "$broot/.collab/gemini-$today-cutoff-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" gemini routine "$broot/.collab/gemini-$today-cutoff-r02.json")" == "1 1" ]]
 # Output names the budget cannot parse are refused.
 brefused 'output name must be' claude-review.sh sonnet review-notes.md
 brefused 'output name must be' claude-review.sh sonnet codex-$today-wrongprefix-r01.md
@@ -433,6 +465,8 @@ for invalid_label in (
     body + "\nF1 [minor]: x\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: ACCEPT WITH CONDITIONS\n",
     body + "\nF1 [minor]: x\nF1 [major]: y\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n",
     body + "\nF1 [blocker]: x\nVERDICT: REJECT\n",
+    # An unknown severity would leave the finding untracked.
+    body + "\nF1 [critical]: x\nF2 [major]: y\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: REJECT\n",
 ):
     assert subprocess.run([validator], input=invalid_label, text=True, capture_output=True).returncode != 0
 for invalid in (

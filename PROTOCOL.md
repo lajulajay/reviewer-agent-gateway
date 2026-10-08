@@ -104,7 +104,8 @@ evidence. A finding that a script or test disproves is dispositioned
 `rejected:` with that evidence; it does not justify another round. A
 `Mechanical check` line gives a quoted value's measured length, not a
 verdict: the owner reads the finding to see which number it claims for the
-value.
+value. A note that a finding cites a `file://` path means the quoted code did
+not come from a file; the owner checks it against the packet before acting.
 
 ## Packets and isolation
 
@@ -120,6 +121,9 @@ value.
   8-character groups next to a script-produced length (e.g.
   `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
   check the reviewer cannot run.
+- Keep hard-tier Gemini packets small: send the delta and the targeted
+  context, not full source. Above about 150 KB the hard model runs out of
+  output tokens before it writes the review, and the wrapper refuses it.
 - Never include `.env` files, credentials, keys, production data, private or
   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
 

@@ -61,7 +61,14 @@ TOOLS: None are available; every tool call is denied. Review only the text above
 
 $(<"$(dirname "$0")/output-contract.txt")"
 max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
-[[ "$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
+prompt_bytes="$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')"
+[[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
+# The hard-tier model spends its output tokens on hidden reasoning over large
+# packets and returns no review (215-245 KB failed, 40 KB succeeded on
+# 2026-10-08). Refuse before the budget check so no round is used.
+hard_max_bytes="${GEMINI_HARD_MAX_PROMPT_BYTES:-150000}"
+[[ "$model" != "$(jq -r '.hard_model // empty' "$policy")" || "$prompt_bytes" -le "$hard_max_bytes" ]] \
+  || fail 65 "hard-tier prompt and packet are $prompt_bytes bytes, over $hard_max_bytes: split the packet or send a delta"
 run_agy() { (cd "$workspace" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_GENAI_USE_VERTEXAI -u GOOGLE_GENAI_USE_GCA -u GOOGLE_CLOUD_PROJECT "$@"); }
 # Gemini tiers are not capped per topic: Gemini is the escalation reviewer.
 budget="$(python3 "$(dirname "$0")/review-budget.py" gemini routine "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
@@ -81,7 +88,7 @@ grace_seconds="${GEMINI_TIMEOUT_GRACE_SECONDS:-30}"
 [[ "$grace_seconds" == <-> && "$grace_seconds" -ge 1 ]] || fail 64 "GEMINI_TIMEOUT_GRACE_SECONDS must be a positive integer"
 # --print-timeout is agy's own limit; the alarm is a backstop if agy hangs.
 set +e
-run_agy perl -e 'alarm($ARGV[0]); shift; exec @ARGV' "$((timeout_seconds + grace_seconds))" agy -p "$prompt_text" --model "$model" --mode plan --sandbox --disable-slash-commands --output-format stream-json --print-timeout "${timeout_seconds}s" > "$response" 2>> "$stderr"
+run_agy perl -e 'alarm($ARGV[0]); shift; exec @ARGV' "$((timeout_seconds + grace_seconds))" agy -p "$prompt_text" --model "$model" --sandbox --disable-slash-commands --output-format stream-json --print-timeout "${timeout_seconds}s" > "$response" 2>> "$stderr"
 code=$?; set -e
 [[ $code -ne 142 ]] || fail 70 "Gemini invocation timed out"
 [[ -s "$response" ]] || fail 70 "Gemini invocation failed or returned empty output"
@@ -89,13 +96,23 @@ result="$(jq -c 'select(.event == "result") | .result' "$response" 2>/dev/null |
 # Model or agent errors exit 3 with an AGY_ERROR line on stderr.
 agy_error="$(grep -m1 AGY_ERROR "$stderr" || true)"
 [[ $code -eq 0 && -n "$result" ]] || fail 70 "Gemini invocation failed (exit $code)${agy_error:+: $agy_error}"
-jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 || fail 70 "Gemini invocation did not succeed"
+# A run that hits the output-token limit ends as ERROR even when the review it
+# returned is complete (hidden reasoning used the tokens; 2026-10-08). Keep it
+# only if it passes validation, and record the warning.
+truncation=""
+if ! jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/dev/null 2>&1; then
+  jq -e '.status == "ERROR" and ((.error // "") | test("output token limit")) and (.response | type == "string")' <<< "$result" >/dev/null 2>&1 \
+    || fail 70 "Gemini invocation did not succeed"
+  jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" 2>> "$stderr" \
+    || fail 70 "Gemini hit the output-token limit before finishing the review; split the packet or send a delta"
+  truncation="agy reported the output-token limit; the returned review passed validation and was kept"
+fi
 # agy reports the session model only in the stream's init event.
 resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response" | sort -u | paste -sd, -)"; [[ -n "$resolved" ]] || fail 74 "Gemini returned no resolved model metadata"
 [[ "$resolved" == "$model" ]] || fail 74 "Gemini resolved outside selected model"
 jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
 checks="$(jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-claims.py" | jq -Rsc 'split("\n") | map(select(length > 0))')"
 denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
-jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" \
-  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" --arg truncation "$truncation" \
+  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end) + (if $truncation == "" then {} else {truncation_warning:$truncation} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
 chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"
