@@ -2,10 +2,10 @@
 
 Workstream: 2026-10-08-gemini-output-cap
 Owner: Claude (2026-10-08, assigned by the user)
-Status: active
-Branch: gemini-output-cap
+Status: done (2026-10-08)
+Branch: gemini-output-cap (merged to main)
 Operational: no
-Links: [failure report](../invocation-failures/kalshi-temperature-bot-2026-10-08-h5-paper-gemini-output-cap.md), [protocol](../PROTOCOL.md#packets-and-isolation)
+Links: [failure report](../../invocation-failures/kalshi-temperature-bot-2026-10-08-h5-paper-gemini-output-cap.md), [protocol](../../PROTOCOL.md#packets-and-isolation)
 
 ## Brief
 
@@ -38,18 +38,21 @@ counting against the budget because they spent real quota.
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Codex (primary) | routine | `.collab/codex-2026-10-08-gemini-output-cap-r01.md` | REJECT |
+| r02 | Codex (primary) | routine | `.collab/codex-2026-10-08-gemini-output-cap-r02.md` | ACCEPT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | fixed: the note, README and PROTOCOL now say the link verifies nothing and the owner checks the quote against the packet | fixed |
-| R01-F2 | minor | fixed: README says one run had a complete review and the other stopped before its verdict; wrapper comment corrected | fixed |
-| R01-F3 | minor | fixed: the cutoff match is anchored to agy's full message; test for an ERROR that only mentions the limit | fixed |
+| R01-F1 | major | verified r02 | closed |
+| R01-F2 | minor | verified r02 | closed |
+| R01-F3 | minor | verified r02 | closed |
 
 ## Log
 
 - 2026-10-08: implemented on branch `gemini-output-cap`; smoke tests and docs-check tests pass.
 - 2026-10-08: the two kalshi-temperature-bot failure reports committed (the folder's other reports are tracked; user instruction).
-- 2026-10-08: Codex r01 REJECT (3 findings), all fixed. Review r02 pending.
+- 2026-10-08: Codex r01 REJECT (3 findings), all fixed. Fixes in `2a57090`.
 - r01: raw review compared with its rows; no unlabeled actionable item
+- r02: raw review compared with its rows; no unlabeled actionable item
+- 2026-10-08: Codex r02 ACCEPT, all r01 items resolved. Merged to main.
