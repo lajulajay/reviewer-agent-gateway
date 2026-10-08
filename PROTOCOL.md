@@ -94,12 +94,16 @@ Every review call spends the user's plan usage, so the wrappers enforce
   each, and asks only whether each is resolved.
 - **Only the user may lift a limit.** `REVIEW_BUDGET_OVERRIDE=<reason>`
   records the reason in the artifact, and `docs-check.py record` fails until
-  a Decisions entry quotes the user's "budget override" approval.
+  a user Decisions entry approves a "budget override" for that round (`rNN`).
+- **Output names** must be `<provider>-YYYY-MM-DD-<topic>[-rNN].md|json`;
+  the daily cap reads the date from the name.
 
 Before requesting another round, the owner checks each finding against the
-evidence. A finding that a script, test, or the artifact's `Mechanical check`
-line disproves is dispositioned `rejected:` with that evidence; it does not
-justify another round.
+evidence. A finding that a script or test disproves is dispositioned
+`rejected:` with that evidence; it does not justify another round. A
+`Mechanical check` line gives a quoted value's measured length, not a
+verdict: the owner reads the finding to see which number it claims for the
+value.
 
 ## Packets and isolation
 

@@ -64,7 +64,7 @@ max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
 [[ "$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
 run_agy() { (cd "$workspace" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_GENAI_USE_VERTEXAI -u GOOGLE_GENAI_USE_GCA -u GOOGLE_CLOUD_PROJECT "$@"); }
 # Gemini tiers are not capped per topic: Gemini is the escalation reviewer.
-prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" gemini routine "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+budget="$(python3 "$(dirname "$0")/review-budget.py" gemini routine "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
 # Quota preflight: the Gemini group shares one weekly limit across Flash and
 # Pro. Stop with headroom left rather than spending AI credits after it.
 min_quota="${GEMINI_REVIEW_MIN_QUOTA:-0.15}"

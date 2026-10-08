@@ -38,7 +38,7 @@ grep -q 'Logged in using ChatGPT' "$tmp/login.txt" || fail 78 "Codex is not usin
 policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
 model="$(jq -er --arg tier "$requested_model" '.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier must be one of: $(jq -r '.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
 effort="$(jq -er --arg tier "$requested_model" '.tiers[$tier].reasoning_effort | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier has no reasoning_effort"
-prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" codex "$requested_model" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+budget="$(python3 "$(dirname "$0")/review-budget.py" codex "$requested_model" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
 codex_version="$(codex --version 2>> "$stderr" | head -1)"
 { cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done
   print -r -- "

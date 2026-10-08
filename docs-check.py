@@ -365,8 +365,10 @@ def record(repo):
                 if have[rid]["severity"] != expect[rid]:
                     errors.append(f"{name}: row {rid} severity {have[rid]['severity']!r} != review {expect[rid]!r}")
             # Only the user may lift the review budget (review-budget.py).
-            if budget_override(art) and not any("budget override" in e[1].lower() for e in decision_entries(ws)):
-                errors.append(f"{name}: r{rnd:02d} ran with a review budget override but no Decisions entry records the user's 'budget override' approval")
+            # decision_entries only returns '- <date>, user, scope:' entries.
+            if budget_override(art) and not any("budget override" in e[1].lower() and re.search(rf"\br{rnd:02d}\b", e[1])
+                                                for e in decision_entries(ws)):
+                errors.append(f"{name}: r{rnd:02d} ran with a review budget override but no user Decisions entry approves a 'budget override' for r{rnd:02d}")
             rev = wrapper_revision(art)
             if post_adoption and rev is None:
                 errors.append(f"{name}: r{rnd:02d} has no wrapper revision (post-adoption reviews need provenance)")

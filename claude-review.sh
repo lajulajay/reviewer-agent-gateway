@@ -47,9 +47,11 @@ fi
 # round per topic, a daily cap per repository, and a lower effort for
 # follow-up rounds, which only check the owner's responses.
 tier=routine
-[[ "$requested_model" == opus || ( "$policy_active" == true && "$model" == "$(jq -r '.hard_model // empty' "$policy")" ) ]] && tier=hard
-prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" claude "$tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
-effort_round=first_round; [[ "$prior_rounds" -eq 0 ]] || effort_round=follow_up
+[[ "$requested_model" == opus || "$model" == *opus* || ( "$policy_active" == true && "$model" == "$(jq -r '.hard_model // empty' "$policy")" ) ]] && tier=hard
+budget="$(python3 "$(dirname "$0")/review-budget.py" claude "$tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+# A follow-up is a later Claude round on the topic; Claude's first look at a
+# topic gets the first-round effort even after another provider's rounds.
+effort_round=first_round; [[ "${budget#* }" -eq 0 ]] || effort_round=follow_up
 effort="$(jq -er --arg r "$effort_round" '.claude_effort[$r]' "$(dirname "$0")/review-budget.json")" || fail 78 "review-budget.json has no claude_effort.$effort_round"
 set +e
 perl -e 'alarm($ENV{CLAUDE_MAX_TIME_SECONDS} || 600); exec @ARGV' claude -p --safe-mode --model "$model" --effort "$effort" --tools= --system-prompt "You are an isolated external adversarial reviewer. Use only the supplied packet. Do not use tools or edit state. $(<"$(dirname "$0")/output-contract.txt")" --no-session-persistence --output-format json --debug-file "$debug" < "$combined" > "$stdout" 2> "$stderr"

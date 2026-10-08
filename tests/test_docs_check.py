@@ -253,6 +253,9 @@ class DocsCheckTest(unittest.TestCase):
         self.f.workstream(GOOD_ROWS, reviews=reviews)
         self.assertIn("r03 ran with a review budget override", self.record()[1])
         self.f.workstream(GOOD_ROWS, reviews=reviews, decisions=(
+            '- 2026-10-03, user, scope: review rounds for x.\n  Quote: "budget override approved for r02". Supersedes: none.'))
+        self.assertIn("r03 ran with a review budget override", self.record()[1])
+        self.f.workstream(GOOD_ROWS, reviews=reviews, decisions=(
             '- 2026-10-03, user, scope: review rounds for x.\n  Quote: "budget override approved for r03". Supersedes: none.'))
         code, out = self.record()
         self.assertEqual(code, 0, out)

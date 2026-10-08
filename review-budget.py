@@ -11,7 +11,8 @@ model (a validation failure, model mismatch, or timeout). After
 max_rounds_per_topic rounds only the escalation provider may run, for
 escalation_rounds more; then the open points go to the user.
 
-On success prints the number of earlier rounds on the topic. On refusal
+On success prints the number of earlier rounds on the topic and how many of
+them this provider ran. On refusal
 prints the reason and exits 1. REVIEW_BUDGET_OVERRIDE=<reason> skips every
 limit; the wrapper records the reason in the artifact and docs-check requires
 a matching user decision in the workstream.
@@ -25,26 +26,28 @@ from datetime import date, datetime
 from pathlib import Path
 
 PROVIDERS = ("claude", "codex", "gemini", "kimi")
-NAME = re.compile(r"^(%s)-(?:\d{4}-\d{2}-\d{2}-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
-# Failed calls in which the model ran and used quota.
-SPENT = re.compile(r"validation|timed out|resolved outside|returned no final message|did not complete")
+NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
+# Failed calls in which the model ran and used quota. "invocation failed" is
+# not counted: it includes calls refused at a usage limit before any work.
+SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed")
 
 
 def parse(name):
     if name.endswith((".sha256", ".diagnostic.json")):
         return None
     m = NAME.match(name)
-    return (m.group(1), m.group(2)) if m else None
+    return (m.group(1), m.group(3), m.group(2)) if m else None
+
+
+def hard(provider, requested, selected):
+    return provider in ("claude", "codex") and (requested in ("opus", "hard") or "opus" in selected)
 
 
 def is_hard(path, provider):
-    if provider not in ("claude", "codex"):
-        return False
     head = path.read_text(errors="replace")[:2000]
     m = re.search(r"(?m)^Requested model: (.+)$", head)
     sel = re.search(r"(?m)^Selected model: (.+)$", head)
-    requested = m.group(1).strip() if m else ""
-    return requested in ("opus", "hard") or "opus" in (sel.group(1) if sel else "")
+    return hard(provider, m.group(1).strip() if m else "", sel.group(1) if sel else "")
 
 
 def rounds(collab):
@@ -52,7 +55,6 @@ def rounds(collab):
     for f in sorted(collab.iterdir()):
         if not f.is_file():
             continue
-        day = datetime.fromtimestamp(f.stat().st_mtime).date()
         if f.name.endswith(".diagnostic.json"):
             parsed = parse(f.name[: -len(".diagnostic.json")] + ".md")
             if not parsed:
@@ -62,11 +64,19 @@ def rounds(collab):
             except (json.JSONDecodeError, OSError):
                 continue
             if d.get("exit_code") in (70, 74) and SPENT.search(d.get("reason", "")):
-                yield parsed[0], parsed[1], f, day, False
+                yield parsed[0], parsed[1], f, day(f, parsed), hard(
+                    parsed[0], d.get("requested_model") or "", d.get("selected_model") or "")
             continue
         parsed = parse(f.name)
         if parsed:
-            yield parsed[0], parsed[1], f, day, is_hard(f, parsed[0])
+            yield parsed[0], parsed[1], f, day(f, parsed), is_hard(f, parsed[0])
+
+
+def day(path, parsed):
+    """The date in the name; checkouts reset mtimes, so mtime is only a fallback."""
+    if parsed[2]:
+        return date.fromisoformat(parsed[2])
+    return datetime.fromtimestamp(path.stat().st_mtime).date()
 
 
 def main(argv):
@@ -76,7 +86,11 @@ def main(argv):
     provider, tier, output = argv[1], argv[2], Path(argv[3])
     policy = json.loads((Path(__file__).resolve().parent / "review-budget.json").read_text())
     parsed = parse(output.name)
-    topic = parsed[1] if parsed else output.stem
+    if not parsed or parsed[0] != provider:
+        print(f"output name must be {provider}-YYYY-MM-DD-<topic>[-rNN].{'json' if provider == 'gemini' else 'md'}, "
+              "so the review budget can count it", file=sys.stderr)
+        return 1
+    topic = parsed[1]
     collab = output.parent
     prior = [r for r in rounds(collab) if r[1] == topic and r[2] != output]
     today = [r for r in rounds(collab) if r[0] == provider and r[3] == date.today()]
@@ -98,7 +112,8 @@ def main(argv):
         print("review budget exceeded: " + "; ".join(problems)
               + ". Only the user may authorize REVIEW_BUDGET_OVERRIDE=<reason>.", file=sys.stderr)
         return 1
-    print(n)
+    # Earlier rounds on the topic, then this provider's own earlier rounds.
+    print(n, sum(1 for r in prior if r[0] == provider))
     return 0
 
 
