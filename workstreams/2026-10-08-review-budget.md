@@ -45,3 +45,4 @@ header; output-contract and packet rules against character counting;
 ## Log
 
 - 2026-10-08: implemented on branch `review-budget`; after the Gemini round the open points go to the user (user correction). Committed with the user's approval.
+- 2026-10-08: Codex r01 not run: ChatGPT usage limit (diagnostic committed). First Gemini attempt refused (exit 78) because the wrapper dirty check matched `.collab/*.diagnostic.json`; fixed by excluding `.collab` from that check.

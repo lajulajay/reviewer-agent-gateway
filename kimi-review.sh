@@ -58,7 +58,7 @@ safe() {
 wrapper_rev="unversioned"
 if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
   wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
-  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
+  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
   [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
 fi
 

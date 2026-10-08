@@ -1,0 +1,429 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index 7f610a5..54b21a2 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -73,6 +73,34 @@ root-cause explanations; or a decision-material disagreement or inconclusive
+ lower-tier round. Model mappings and per-provider details are in
+ [README.md](README.md).
+ 
++## Review budget
++
++Every review call spends the user's plan usage, so the wrappers enforce
++`review-budget.json` before calling a model (exit 79 when refused):
++
++- **Five rounds per topic, then Gemini, then the user.** The topic is the
++  output name without provider, date, and `-rNN`; rounds from every provider
++  count together, including failed calls that reached the model. After five,
++  only `gemini-review.sh` may run, once. After that the owner brings the open
++  points to the user in one packet, as in the disagreement escalation above:
++  the competing claims, the evidence, Gemini's assessment, and the exact
++  decision needed. No further review runs unless the user approves an
++  override.
++- **One hard-tier round per topic** (`opus` or Codex `hard`); use it where it
++  matters most.
++- **Eight reviews per provider per repository per day.**
++- **Claude follow-up rounds run at low effort**; the first round runs at
++  medium. A follow-up packet lists the open IDs and the owner's response to
++  each, and asks only whether each is resolved.
++- **Only the user may lift a limit.** `REVIEW_BUDGET_OVERRIDE=<reason>`
++  records the reason in the artifact, and `docs-check.py record` fails until
++  a Decisions entry quotes the user's "budget override" approval.
++
++Before requesting another round, the owner checks each finding against the
++evidence. A finding that a script, test, or the artifact's `Mechanical check`
++line disproves is dispositioned `rejected:` with that evidence; it does not
++justify another round.
++
+ ## Packets and isolation
+ 
+ - Reviewers are read-only. They receive only explicit, sanitized packet
+@@ -83,6 +111,10 @@ lower-tier round. Model mappings and per-provider details are in
+   or commit range, relevant evidence and invariants, the competing claims,
+   the exact decision, prohibited actions, and named questions. Do not ask for
+   repository-wide rediscovery.
++- Reviewers cannot count characters. Write every hash or long identifier in
++  8-character groups next to a script-produced length (e.g.
++  `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
++  check the reviewer cannot run.
+ - Never include `.env` files, credentials, keys, production data, private or
+   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
+ 
+diff --git a/README.md b/README.md
+index 0a33805..8723ad9 100644
+--- a/README.md
++++ b/README.md
+@@ -174,6 +174,23 @@ a backstop. Artifacts keep the top-level `response` field and add
+ the sign-in), so the copy is left in place and traceable by the recorded ID.
+ Packets must still exclude secrets; the private-path rules above apply.
+ 
++## Review budget and usage records
++
++`review-budget.py` runs in every wrapper (Kimi is inactive and excluded)
++before the model call and applies `review-budget.json`; the rules are in
++[PROTOCOL.md](PROTOCOL.md#review-budget). It counts the topic's artifacts in
++`.collab/`, plus diagnostics for failed calls that reached the model, and
++counts the daily cap by file modification date. Changing the limits is a
++committed change to `review-budget.json`; the wrappers refuse to run with it
++uncommitted.
++
++Artifacts record what each call used: the Claude header has `Effort:` and
++`Usage:` (tokens, `total_cost_usd` as Claude Code reports it, duration, and
++turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
++artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
++`Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
++when a review says a quoted hex value has a length it does not have.
++
+ Run provider-free regression checks with:
+ 
+ ```bash
+diff --git a/claude-review.sh b/claude-review.sh
+index 665faab..a624797 100755
+--- a/claude-review.sh
++++ b/claude-review.sh
+@@ -43,9 +43,18 @@ else
+   model="$requested_model"
+ fi
+ { cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done; } > "$combined"
++# Review budget (review-budget.json): round caps per topic, one hard-tier
++# round per topic, a daily cap per repository, and a lower effort for
++# follow-up rounds, which only check the owner's responses.
++tier=routine
++[[ "$requested_model" == opus || ( "$policy_active" == true && "$model" == "$(jq -r '.hard_model // empty' "$policy")" ) ]] && tier=hard
++prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" claude "$tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
++effort_round=first_round; [[ "$prior_rounds" -eq 0 ]] || effort_round=follow_up
++effort="$(jq -er --arg r "$effort_round" '.claude_effort[$r]' "$(dirname "$0")/review-budget.json")" || fail 78 "review-budget.json has no claude_effort.$effort_round"
+ set +e
+-perl -e 'alarm($ENV{CLAUDE_MAX_TIME_SECONDS} || 600); exec @ARGV' claude -p --safe-mode --model "$model" --tools= --system-prompt "You are an isolated external adversarial reviewer. Use only the supplied packet. Do not use tools or edit state. $(<"$(dirname "$0")/output-contract.txt")" --no-session-persistence --output-format json --debug-file "$debug" < "$combined" > "$stdout" 2> "$stderr"
++perl -e 'alarm($ENV{CLAUDE_MAX_TIME_SECONDS} || 600); exec @ARGV' claude -p --safe-mode --model "$model" --effort "$effort" --tools= --system-prompt "You are an isolated external adversarial reviewer. Use only the supplied packet. Do not use tools or edit state. $(<"$(dirname "$0")/output-contract.txt")" --no-session-persistence --output-format json --debug-file "$debug" < "$combined" > "$stdout" 2> "$stderr"
+ code=$?; set -e
++[[ $code -ne 142 ]] || fail 70 "Claude invocation timed out"
+ [[ $code -eq 0 ]] || fail 70 "Claude invocation failed"
+ jq -e '.is_error == false and (.result | type == "string")' "$stdout" >/dev/null 2>&1 || fail 70 "Claude returned invalid JSON"
+ jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Claude response failed substance validation"
+@@ -53,5 +62,7 @@ resolved="$(jq -r '[(.modelUsage // {} | keys[]?), .model?] | map(select(. != nu
+ if [[ "$policy_active" == true ]]; then
+   jq -e --arg model "$model" '(.modelUsage // {} | has($model)) or .model == $model' "$stdout" >/dev/null 2>&1 || fail 74 "Claude resolved outside selected model"
+ fi
+-{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print ''; jq -r '.result' "$stdout"; } > "$output"
++usage="$(jq -c '{usage: (.usage // null | if . then {input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens} else null end), total_cost_usd, duration_ms, num_turns}' "$stdout")"
++checks="$(jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-claims.py")"
++{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
+ chmod 444 "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Claude artifact or checksum was not created"; print "captured $output"
+diff --git a/codex-review.sh b/codex-review.sh
+index e41e5bc..48da170 100755
+--- a/codex-review.sh
++++ b/codex-review.sh
+@@ -38,6 +38,7 @@ grep -q 'Logged in using ChatGPT' "$tmp/login.txt" || fail 78 "Codex is not usin
+ policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
+ model="$(jq -er --arg tier "$requested_model" '.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier must be one of: $(jq -r '.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
+ effort="$(jq -er --arg tier "$requested_model" '.tiers[$tier].reasoning_effort | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier has no reasoning_effort"
++prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" codex "$requested_model" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+ codex_version="$(codex --version 2>> "$stderr" | head -1)"
+ { cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done
+   print -r -- "
+@@ -67,5 +68,7 @@ python3 "$(dirname "$0")/reviewer-validate.py" < "$last" || fail 70 "Codex respo
+ blocked="$(jq -s '[foreach .[] as $e (false; . or ($e.type == "turn.started"); if . and $e.type == "item.completed" and $e.item.type == "error" then 1 else empty end)] | length' "$stdout" 2>/dev/null || print 0)"
+ # codex exec does not report the serving model; the artifact records the
+ # pinned request.
+-{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print ''; cat "$last"; } > "$tmp/final.md"
++usage="$(jq -sc '[.[] | select(.type == "turn.completed") | .usage] | last // null' "$stdout" 2>/dev/null || print null)"
++checks="$(python3 "$(dirname "$0")/reviewer-claims.py" < "$last")"
++{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
+ chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Codex artifact or checksum was not created"; print "captured $output"
+diff --git a/docs-check.py b/docs-check.py
+index ce1bf2f..d594739 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -112,6 +112,19 @@ def verdict(path):
+     return m[-1].lower() if m else None
+ 
+ 
++def budget_override(path):
++    """The REVIEW_BUDGET_OVERRIDE reason a wrapper recorded, or None."""
++    if path.suffix == ".json":
++        try:
++            return json.loads(path.read_text()).get("reviewer_metadata", {}).get("budget_override")
++        except json.JSONDecodeError:
++            return None
++    # The wrapper header is the block after the title line, before the review.
++    parts = path.read_text(errors="replace").split("\n\n", 2)
++    m = re.search(r"(?m)^Budget override: (.+)$", parts[1]) if len(parts) > 1 else None
++    return m.group(1).strip() if m else None
++
++
+ def wrapper_revision(path):
+     if path.suffix == ".json":
+         try:
+@@ -351,6 +364,9 @@ def record(repo):
+             for rid in sorted(set(have) & set(expect)):
+                 if have[rid]["severity"] != expect[rid]:
+                     errors.append(f"{name}: row {rid} severity {have[rid]['severity']!r} != review {expect[rid]!r}")
++            # Only the user may lift the review budget (review-budget.py).
++            if budget_override(art) and not any("budget override" in e[1].lower() for e in decision_entries(ws)):
++                errors.append(f"{name}: r{rnd:02d} ran with a review budget override but no Decisions entry records the user's 'budget override' approval")
+             rev = wrapper_revision(art)
+             if post_adoption and rev is None:
+                 errors.append(f"{name}: r{rnd:02d} has no wrapper revision (post-adoption reviews need provenance)")
+diff --git a/gemini-review.sh b/gemini-review.sh
+index 9ff85b0..98edee9 100755
+--- a/gemini-review.sh
++++ b/gemini-review.sh
+@@ -63,6 +63,8 @@ $(<"$(dirname "$0")/output-contract.txt")"
+ max_prompt_bytes="${GEMINI_MAX_PROMPT_BYTES:-800000}"
+ [[ "$(print -rn -- "$prompt_text" | wc -c | tr -d ' ')" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (agy takes the prompt as an argument)"
+ run_agy() { (cd "$workspace" && env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_GENAI_USE_VERTEXAI -u GOOGLE_GENAI_USE_GCA -u GOOGLE_CLOUD_PROJECT "$@"); }
++# Gemini tiers are not capped per topic: Gemini is the escalation reviewer.
++prior_rounds="$(python3 "$(dirname "$0")/review-budget.py" gemini routine "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+ # Quota preflight: the Gemini group shares one weekly limit across Flash and
+ # Pro. Stop with headroom left rather than spending AI credits after it.
+ min_quota="${GEMINI_REVIEW_MIN_QUOTA:-0.15}"
+@@ -92,7 +94,8 @@ jq -e '.status == "SUCCESS" and (.response | type == "string")' <<< "$result" >/
+ resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response" | sort -u | paste -sd, -)"; [[ -n "$resolved" ]] || fail 74 "Gemini returned no resolved model metadata"
+ [[ "$resolved" == "$model" ]] || fail 74 "Gemini resolved outside selected model"
+ jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
++checks="$(jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-claims.py" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+ denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
+-jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" \
+-  '. + {reviewer_metadata:{owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied}}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
++jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" \
++  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+ chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"
+diff --git a/output-contract.txt b/output-contract.txt
+index 6abb99e..66183d8 100644
+--- a/output-contract.txt
++++ b/output-contract.txt
+@@ -5,3 +5,7 @@ the findings and conditions, write the line `ATTESTATION: all actionable
+ findings and conditions are labeled.` Your final non-empty line must be
+ exactly one of: VERDICT: ACCEPT; VERDICT: ACCEPT WITH CONDITIONS; VERDICT:
+ REJECT. Do not use any other verdict label or mention another verdict line.
++You have no tools and cannot reliably count characters: do not base a finding
++on the length of a hash or other long identifier. If a length matters, ask in
++a condition for a script-produced check. Conditions must concern the work
++under review, not hypothetical future packets.
+diff --git a/review-budget.json b/review-budget.json
+new file mode 100644
+index 0000000..c5408a6
+--- /dev/null
++++ b/review-budget.json
+@@ -0,0 +1,8 @@
++{
++  "max_rounds_per_topic": 5,
++  "escalation_provider": "gemini",
++  "escalation_rounds": 1,
++  "max_hard_rounds_per_topic": 1,
++  "max_reviews_per_provider_per_day": 8,
++  "claude_effort": {"first_round": "medium", "follow_up": "low"}
++}
+diff --git a/review-budget.py b/review-budget.py
+new file mode 100755
+index 0000000..44ae121
+--- /dev/null
++++ b/review-budget.py
+@@ -0,0 +1,106 @@
++#!/usr/bin/env python3
++"""Refuse a review call that would exceed the review budget (review-budget.json).
++
++  review-budget.py <provider> <hard|routine> <output-path>
++
++A topic is the output name without its provider prefix, date, `-rNN` suffix,
++and extension, so `claude-2026-10-07-h5-final-analysis-r22.md` and
++`gemini-2026-10-08-h5-final-analysis.json` are rounds of `h5-final-analysis`.
++Every provider's rounds count together, as do failed calls that reached the
++model (a validation failure, model mismatch, or timeout). After
++max_rounds_per_topic rounds only the escalation provider may run, for
++escalation_rounds more; then the open points go to the user.
++
++On success prints the number of earlier rounds on the topic. On refusal
++prints the reason and exits 1. REVIEW_BUDGET_OVERRIDE=<reason> skips every
++limit; the wrapper records the reason in the artifact and docs-check requires
++a matching user decision in the workstream.
++"""
++
++import json
++import os
++import re
++import sys
++from datetime import date, datetime
++from pathlib import Path
++
++PROVIDERS = ("claude", "codex", "gemini", "kimi")
++NAME = re.compile(r"^(%s)-(?:\d{4}-\d{2}-\d{2}-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
++# Failed calls in which the model ran and used quota.
++SPENT = re.compile(r"validation|timed out|resolved outside|returned no final message|did not complete")
++
++
++def parse(name):
++    if name.endswith((".sha256", ".diagnostic.json")):
++        return None
++    m = NAME.match(name)
++    return (m.group(1), m.group(2)) if m else None
++
++
++def is_hard(path, provider):
++    if provider not in ("claude", "codex"):
++        return False
++    head = path.read_text(errors="replace")[:2000]
++    m = re.search(r"(?m)^Requested model: (.+)$", head)
++    sel = re.search(r"(?m)^Selected model: (.+)$", head)
++    requested = m.group(1).strip() if m else ""
++    return requested in ("opus", "hard") or "opus" in (sel.group(1) if sel else "")
++
++
++def rounds(collab):
++    """Yield (provider, topic, path, day, hard) for every counted round."""
++    for f in sorted(collab.iterdir()):
++        if not f.is_file():
++            continue
++        day = datetime.fromtimestamp(f.stat().st_mtime).date()
++        if f.name.endswith(".diagnostic.json"):
++            parsed = parse(f.name[: -len(".diagnostic.json")] + ".md")
++            if not parsed:
++                continue
++            try:
++                d = json.loads(f.read_text())
++            except (json.JSONDecodeError, OSError):
++                continue
++            if d.get("exit_code") in (70, 74) and SPENT.search(d.get("reason", "")):
++                yield parsed[0], parsed[1], f, day, False
++            continue
++        parsed = parse(f.name)
++        if parsed:
++            yield parsed[0], parsed[1], f, day, is_hard(f, parsed[0])
++
++
++def main(argv):
++    if len(argv) != 4 or argv[1] not in PROVIDERS or argv[2] not in ("hard", "routine"):
++        print("usage: review-budget.py <claude|codex|gemini|kimi> <hard|routine> <output-path>", file=sys.stderr)
++        return 64
++    provider, tier, output = argv[1], argv[2], Path(argv[3])
++    policy = json.loads((Path(__file__).resolve().parent / "review-budget.json").read_text())
++    parsed = parse(output.name)
++    topic = parsed[1] if parsed else output.stem
++    collab = output.parent
++    prior = [r for r in rounds(collab) if r[1] == topic and r[2] != output]
++    today = [r for r in rounds(collab) if r[0] == provider and r[3] == date.today()]
++    n, cap = len(prior), policy["max_rounds_per_topic"]
++    esc, esc_n = policy["escalation_provider"], policy["escalation_rounds"]
++    problems = []
++    if n >= cap + esc_n:
++        problems.append(f"topic '{topic}' has had {n} review rounds ({cap} plus {esc_n} {esc} escalation); "
++                        f"bring the open points to the user (competing claims, evidence, the {esc} assessment, and the decision needed)")
++    elif n >= cap and provider != esc:
++        problems.append(f"topic '{topic}' has had {n} review rounds (cap {cap}); escalate to {esc}-review.sh, then to the user")
++    hard_n = sum(1 for r in prior if r[4])
++    if tier == "hard" and provider in ("claude", "codex") and hard_n >= policy["max_hard_rounds_per_topic"]:
++        problems.append(f"topic '{topic}' already used {hard_n} hard-tier round(s) (cap {policy['max_hard_rounds_per_topic']}); use the routine tier")
++    if len(today) >= policy["max_reviews_per_provider_per_day"]:
++        problems.append(f"{len(today)} {provider} reviews already ran in this repository today (cap {policy['max_reviews_per_provider_per_day']})")
++    override = os.environ.get("REVIEW_BUDGET_OVERRIDE", "").strip()
++    if problems and not override:
++        print("review budget exceeded: " + "; ".join(problems)
++              + ". Only the user may authorize REVIEW_BUDGET_OVERRIDE=<reason>.", file=sys.stderr)
++        return 1
++    print(n)
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv))
+diff --git a/reviewer-claims.py b/reviewer-claims.py
+new file mode 100755
+index 0000000..a836dc3
+--- /dev/null
++++ b/reviewer-claims.py
+@@ -0,0 +1,42 @@
++#!/usr/bin/env python3
++"""Print a note for each length claim in a review that its own quoted hex value contradicts.
++
++Reviewers run without tools and miscount long identifiers (three false
++SHA-256 findings on 2026-10-07; invocation-failures/). A line that quotes a
++hex value of 32+ characters and calls something N characters long, where N
++is within 3 of the value's real length but not equal to it, gets a note. The
++wrapper records each note in the artifact so the owner can dismiss the
++finding without another round.
++"""
++
++import re
++import sys
++
++HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{32,}(?![0-9A-Za-z])")
++CLAIM = re.compile(r"(?i)\b(\d{2,3})[\s-]*(?:hexadecimal\s+|hex\s+)?(?:characters?|chars?|digits?)\b")
++
++
++def notes(text):
++    out = []
++    for line in text.splitlines():
++        values = HEX.findall(line)
++        if not values:
++            continue
++        lengths = {len(v) for v in values}
++        label = re.match(r"^\W*(F\d+|C\d+)", line)
++        where = label.group(1) if label else "a review line"
++        for m in CLAIM.finditer(line):
++            n = int(m.group(1))
++            if n in lengths:
++                continue
++            for v in values:
++                if abs(len(v) - n) <= 3:
++                    groups = " ".join(v[i:i + 8] for i in range(0, len(v), 8))
++                    out.append(f"{where} says {n} characters, but the value it quotes is {len(v)} ({groups})")
++                    break
++    return list(dict.fromkeys(out))
++
++
++if __name__ == "__main__":
++    for note in notes(sys.stdin.read()):
++        print(note)
+diff --git a/workstreams/2026-10-08-review-budget.md b/workstreams/2026-10-08-review-budget.md
+new file mode 100644
+index 0000000..cdf79e8
+--- /dev/null
++++ b/workstreams/2026-10-08-review-budget.md
+@@ -0,0 +1,47 @@
++# Review budget
++
++Workstream: 2026-10-08-review-budget
++Owner: Claude (2026-10-08, assigned by the user)
++Status: active
++Branch: review-budget
++Operational: no
++Links: [failure report](../invocation-failures/kalshi-temperature-bot-2026-10-07-h5-sha256-review-errors.md), [protocol](../PROTOCOL.md#review-budget)
++
++## Brief
++
++The H5 final-analysis review in `kalshi-temperature-bot` ran 23 Claude rounds
++(r02–r24) on 2026-10-07, 32 Claude reviews in that repository that day, and
++the user reports it used about 20% of a 5-hour Claude session limit. Three
++rounds were triggered by false SHA-256 length findings from a reviewer that
++cannot count characters. Nothing limited rounds, and the Claude wrapper set no
++effort and recorded no usage.
++
++Change: `review-budget.py` + `review-budget.json` enforced by the Claude,
++Codex, and Gemini wrappers before the model call (exit 79); Claude effort
++medium for the first round, low for follow-ups; usage recorded in every
++artifact; `reviewer-claims.py` notes false hex-length claims in the artifact
++header; output-contract and packet rules against character counting;
++`docs-check.py record` requires a user decision for any budget override.
++
++## Decisions
++
++- 2026-10-08, user, scope: review round limits.
++  Quote: "like the idea of limits but 3 feels stringent for hard topics. let's make it 5 after which it must be escalated to Gemini and then owner". Supersedes: the proposed 3-round cap.
++- 2026-10-08, user, scope: which wrappers carry the limits.
++  Quote: "Other wrappers: yes". Supersedes: none.
++- 2026-10-08, user, scope: who decides after the Gemini escalation.
++  Quote: "by then owner, i meant me not the repo owner". Supersedes: the owner-agent reading of the first decision.
++
++## Reviews
++
++| Round | Reviewer | Tier | Artifact | Verdict |
++| :--- | :--- | :--- | :--- | :--- |
++
++## Findings and conditions
++
++| ID | Severity | Disposition | Status |
++| :--- | :--- | :--- | :--- |
++
++## Log
++
++- 2026-10-08: implemented on branch `review-budget`; after the Gemini round the open points go to the user (user correction). Committed with the user's approval.

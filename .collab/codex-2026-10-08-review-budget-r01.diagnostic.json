@@ -1,0 +1,11 @@
+{
+  "provider": "codex",
+  "owner": "claude",
+  "requested_model": "hard",
+  "selected_model": "gpt-6-sol",
+  "reason": "Codex invocation failed (exit 1)",
+  "exit_code": 70,
+  "elapsed_seconds": 2,
+  "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a119d7-3862-7e21-9977-6e643a40705b\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.\"}}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:52 AM.\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:52 AM.\"}}\n",
+  "stderr": ""
+}

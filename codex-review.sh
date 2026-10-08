@@ -26,7 +26,7 @@ safe() { local f="$1" label="$2"; [[ -f "$f" && ! -L "$f" ]] || fail 66 "$label 
 wrapper_rev="unversioned"
 if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
   wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
-  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt 2>/dev/null)" || fail 78 "cannot read gateway status"
+  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
   [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
 fi
 command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"

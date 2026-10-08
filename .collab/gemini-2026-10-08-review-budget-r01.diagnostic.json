@@ -1,0 +1,12 @@
+{
+  "provider": "gemini",
+  "cli": "agy",
+  "owner": "claude",
+  "requested_model": "pro",
+  "preflight_selected_model": "",
+  "reason": "gateway wrapper files have uncommitted changes",
+  "exit_code": 78,
+  "elapsed_seconds": 0,
+  "stdout": "",
+  "stderr": ""
+}
