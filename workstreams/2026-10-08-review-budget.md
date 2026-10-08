@@ -2,8 +2,8 @@
 
 Workstream: 2026-10-08-review-budget
 Owner: Claude (2026-10-08, assigned by the user)
-Status: active
-Branch: review-budget
+Status: done (2026-10-08)
+Branch: review-budget (merged to main)
 Operational: no
 Links: [failure report](../invocation-failures/kalshi-temperature-bot-2026-10-07-h5-sha256-review-errors.md), [protocol](../PROTOCOL.md#review-budget)
 
@@ -37,32 +37,36 @@ header; output-contract and packet rules against character counting;
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Gemini (backup; Codex at usage limit) | pro | `.collab/gemini-2026-10-08-review-budget-r01b.json` | REJECT |
+| r02 | Gemini (backup; Codex at usage limit) | pro | `.collab/gemini-2026-10-08-review-budget-r02.json` | ACCEPT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | blocker | fix pending r02: daily cap reads the date from the output name; mtime only for undated names | open |
-| R01-F2 | blocker | fix pending r02: note gives every stated hex length and the measured one, without attributing; PROTOCOL says it is not a verdict | open |
-| R01-F3 | major | rejected: a retry under the same name is a second model call, so counting the diagnostic and the artifact counts two real calls | open |
-| R01-F4 | major | fix pending r02 (partial): `returned`/`did not succeed` reasons now count; `invocation failed` stays uncounted because it includes usage-limit refusals that never ran (Codex r01 attempt, 2026-10-08) | open |
-| R01-F5 | major | fix pending r02: diagnostics carry their requested/selected model into the hard-tier count | open |
-| R01-F6 | major | fix pending r02: output names that do not parse, or whose provider prefix differs, are refused | open |
-| R01-F7 | minor | fix pending r02: Claude effort keys on Claude's own earlier rounds | open |
-| R01-F8 | minor | fix pending r02: claims must say hex/hexadecimal | open |
-| R01-F9 | minor | fix pending r02 (partial): entry must name the round; the user-actor part is rejected because decision_entries already accepts only `- <date>, user, scope:` lines | open |
-| R01-F10 | minor | rejected: counting a topic across dates is deliberate so a date change cannot reset the cap (user decision 2026-10-08); a reused name gets a refusal that names the topic | open |
-| R01-C1 | condition | fix pending r02 (F1) | open |
-| R01-C2 | condition | fix pending r02 (F2, F8) | open |
-| R01-C3 | condition | rejected with F3 | open |
-| R01-C4 | condition | partial with F4 | open |
-| R01-C5 | condition | fix pending r02 (F5); the existing diagnostic already records the requested model | open |
-| R01-C6 | condition | fix pending r02 (F6) | open |
-| R01-C7 | condition | fix pending r02 (F7) | open |
-| R01-C8 | condition | partial with F9 | open |
+| R01-F1 | blocker | verified r02 | closed |
+| R01-F2 | blocker | verified r02 | closed |
+| R01-F3 | major | verified r02 | closed |
+| R01-F4 | major | verified r02 | closed |
+| R01-F5 | major | verified r02 | closed |
+| R01-F6 | major | verified r02 | closed |
+| R01-F7 | minor | verified r02 | closed |
+| R01-F8 | minor | verified r02 | closed |
+| R01-F9 | minor | verified r02 | closed |
+| R01-F10 | minor | verified r02 | closed |
+| R01-C1 | condition | verified r02 | closed |
+| R01-C2 | condition | verified r02 | closed |
+| R01-C3 | condition | verified r02 | closed |
+| R01-C4 | condition | verified r02 | closed |
+| R01-C5 | condition | verified r02 | closed |
+| R01-C6 | condition | verified r02 | closed |
+| R01-C7 | condition | verified r02 | closed |
+| R01-C8 | condition | verified r02 | closed |
 
 ## Log
 
 - 2026-10-08: implemented on branch `review-budget`; after the Gemini round the open points go to the user (user correction). Committed with the user's approval.
 - 2026-10-08: Codex r01 not run: ChatGPT usage limit (diagnostic committed). First Gemini attempt refused (exit 78) because the wrapper dirty check matched `.collab/*.diagnostic.json`; fixed by excluding `.collab` from that check.
 - 2026-10-08: Gemini r01 REJECT (10 findings). The output was named `-r01b` by mistake, so the budget counts it under its own topic. Fixes for F1, F2, F4–F9 applied; F3 and F10 rejected; F4 and F9 partly rejected (see rows). Review r02 pending.
+- r01: raw review compared with its rows; no unlabeled actionable item
+- r02: raw review compared with its rows; no unlabeled actionable item
+- 2026-10-08: Gemini r02 ACCEPT, all r01 items resolved. Merged to main.

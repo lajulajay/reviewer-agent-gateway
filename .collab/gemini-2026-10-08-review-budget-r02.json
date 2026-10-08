@@ -1,0 +1,29 @@
+{
+  "conversation_id": "323253e1-7ece-420f-9407-16a7d11b91dd",
+  "status": "SUCCESS",
+  "response": "R01-F1 is resolved.\nR01-F2 is resolved.\nR01-F3 is resolved.\nR01-F4 is resolved.\nR01-F5 is resolved.\nR01-F6 is resolved.\nR01-F7 is resolved.\nR01-F8 is resolved.\nR01-F9 is resolved.\nR01-F10 is resolved.\nR01-C1 is resolved.\nR01-C2 is resolved.\nR01-C3 is resolved.\nR01-C4 is resolved.\nR01-C5 is resolved.\nR01-C6 is resolved.\nR01-C7 is resolved.\nR01-C8 is resolved.\n\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: ACCEPT\n",
+  "duration_seconds": 394.982495,
+  "num_turns": 1,
+  "usage": {
+    "input_tokens": 23037,
+    "output_tokens": 61151,
+    "thinking_tokens": 60953,
+    "cache_read_tokens": 0,
+    "total_tokens": 84188
+  },
+  "reviewer_metadata": {
+    "owner": "claude",
+    "wrapper_revision": "245eed71ff0780953227a6b3306eb4b96d9c5b6f",
+    "cli": "agy",
+    "cli_version": "1.3.1",
+    "requested_model": "pro",
+    "preflight_selected_model": "gemini-3.8-flash-high",
+    "resolved_models": [
+      "gemini-3.8-flash-high"
+    ],
+    "conversation_id": "323253e1-7ece-420f-9407-16a7d11b91dd",
+    "quota_remaining_before": 0.8551616072654724,
+    "denied_tool_calls": [],
+    "mechanical_checks": []
+  }
+}
