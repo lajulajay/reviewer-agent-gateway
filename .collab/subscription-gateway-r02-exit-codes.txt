@@ -1,0 +1,91 @@
+claude-review.sh-24-# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
+claude-review.sh-25-# copy outside any repository (consumer-shim fixtures) records "unversioned",
+claude-review.sh-26-# which docs-check rejects for reviews captured after adoption.
+claude-review.sh-27-wrapper_rev="unversioned"
+claude-review.sh-28-if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
+claude-review.sh:29:  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
+claude-review.sh:30:  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
+claude-review.sh:31:  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
+claude-review.sh-32-fi
+claude-review.sh:33:command -v claude >/dev/null || fail 69 "claude CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+claude-review.sh-34-policy="${CLAUDE_REVIEW_MODEL_POLICY:-$(dirname "$0")/claude-model-policy.json}"
+claude-review.sh-35-policy_active=false
+claude-review.sh-36-if [[ -f "$policy" || -n "${CLAUDE_REVIEW_MODEL_POLICY:-}" ]]; then
+claude-review.sh-37-  policy_active=true
+claude-review.sh:38:  [[ -z "${ANTHROPIC_API_KEY:-}" ]] || fail 78 "ANTHROPIC_API_KEY would bypass included Claude Code usage"
+claude-review.sh:39:  claude auth status --json > "$tmp/auth.json" 2>> "$stderr" || fail 78 "Claude Code authentication status is unavailable"
+claude-review.sh:40:  jq -e '.loggedIn == true and .authMethod == "claude.ai"' "$tmp/auth.json" >/dev/null 2>&1 || fail 78 "Claude Code is not using claude.ai subscription authentication"
+claude-review.sh:41:  model="$(python3 "$(dirname "$0")/claude-model-select.py" "$policy" "$requested_model" 2> "$stderr")" || fail 78 "Claude model selection failed"
+claude-review.sh-42-else
+claude-review.sh-43-  model="$requested_model"
+claude-review.sh-44-fi
+claude-review.sh-45-{ cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done; } > "$combined"
+claude-review.sh-46-# Review budget (review-budget.json): round caps per topic, one hard-tier
+--
+claude-review.sh-50-[[ "$requested_model" == opus || "$model" == *opus* || ( "$policy_active" == true && "$model" == "$(jq -r '.hard_model // empty' "$policy")" ) ]] && tier=hard
+claude-review.sh-51-budget="$(python3 "$(dirname "$0")/review-budget.py" claude "$tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+claude-review.sh-52-# A follow-up is a later Claude round on the topic; Claude's first look at a
+claude-review.sh-53-# topic gets the first-round effort even after another provider's rounds.
+claude-review.sh-54-effort_round=first_round; [[ "${budget#* }" -eq 0 ]] || effort_round=follow_up
+claude-review.sh:55:effort="$(jq -er --arg r "$effort_round" '.claude_effort[$r]' "$(dirname "$0")/review-budget.json")" || fail 78 "review-budget.json has no claude_effort.$effort_round"
+claude-review.sh-56-set +e
+claude-review.sh:57:perl -e 'alarm($ENV{CLAUDE_MAX_TIME_SECONDS} || 600); exec @ARGV' claude -p --safe-mode --model "$model" --effort "$effort" --tools= --system-prompt "You are an isolated external adversarial reviewer. Use only the supplied packet. Do not use tools or edit state. $(<"$(dirname "$0")/output-contract.txt")" --no-session-persistence --output-format json --debug-file "$debug" < "$combined" > "$stdout" 2> "$stderr"
+claude-review.sh-58-code=$?; set -e
+claude-review.sh:59:[[ $code -ne 142 ]] || fail 70 "Claude invocation timed out"
+claude-review.sh:60:[[ $code -eq 0 ]] || fail 70 "Claude invocation failed"
+claude-review.sh:61:jq -e '.is_error == false and (.result | type == "string")' "$stdout" >/dev/null 2>&1 || fail 70 "Claude returned invalid JSON"
+claude-review.sh:62:jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Claude response failed substance validation"
+claude-review.sh-63-resolved="$(jq -r '[(.modelUsage // {} | keys[]?), .model?] | map(select(. != null and . != "")) | unique | join(", ")' "$stdout")"
+claude-review.sh-64-if [[ "$policy_active" == true ]]; then
+claude-review.sh:65:  jq -e --arg model "$model" '(.modelUsage // {} | has($model)) or .model == $model' "$stdout" >/dev/null 2>&1 || fail 74 "Claude resolved outside selected model"
+claude-review.sh-66-fi
+claude-review.sh-67-usage="$(jq -c '{usage: (.usage // null | if . then {input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens} else null end), total_cost_usd, duration_ms, num_turns}' "$stdout")"
+claude-review.sh-68-checks="$(jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-claims.py")"
+claude-review.sh-69-{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
+claude-review.sh:70:chmod 444 "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Claude artifact or checksum was not created"; print "captured $output"
+--
+codex-review.sh-23-# ran from; refuse to run with uncommitted wrapper changes or a Git error. A
+codex-review.sh-24-# copy outside any repository (consumer-shim fixtures) records "unversioned",
+codex-review.sh-25-# which docs-check rejects for reviews captured after adoption.
+codex-review.sh-26-wrapper_rev="unversioned"
+codex-review.sh-27-if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
+codex-review.sh:28:  wrapper_rev="$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null)" || fail 78 "cannot read the gateway revision"
+codex-review.sh:29:  wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
+codex-review.sh:30:  [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
+codex-review.sh-31-fi
+codex-review.sh:32:command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+codex-review.sh-33-# Reviews run on the ChatGPT plan. An API key would switch Codex to billed
+codex-review.sh-34-# API usage, so its presence is refused and the login method is checked.
+codex-review.sh:35:[[ -z "${OPENAI_API_KEY:-}" && -z "${CODEX_API_KEY:-}" ]] || fail 78 "OPENAI_API_KEY/CODEX_API_KEY would bypass ChatGPT plan usage"
+codex-review.sh:36:codex login status > "$tmp/login.txt" 2>&1 || fail 78 "Codex login status is unavailable"
+codex-review.sh:37:grep -q 'Logged in using ChatGPT' "$tmp/login.txt" || fail 78 "Codex is not using ChatGPT plan authentication"
+codex-review.sh-38-policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
+codex-review.sh:39:model="$(jq -er --arg tier "$requested_model" '.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier must be one of: $(jq -r '.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
+codex-review.sh:40:effort="$(jq -er --arg tier "$requested_model" '.tiers[$tier].reasoning_effort | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Codex review tier has no reasoning_effort"
+codex-review.sh-41-budget="$(python3 "$(dirname "$0")/review-budget.py" codex "$requested_model" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+codex-review.sh-42-codex_version="$(codex --version 2>> "$stderr" | head -1)"
+codex-review.sh-43-{ cat "$prompt"; for f in "$@"; do safe "$f" packet; print -r -- "\n\n===== $(basename "$REPLY") ====="; cat "$REPLY"; done
+codex-review.sh-44-  print -r -- "
+codex-review.sh-45-
+--
+codex-review.sh-54-# rollout to fork.
+codex-review.sh-55-disabled=(apps plugins remote_plugin plugin_sharing multi_agent multi_agent_v2 collaboration_modes code_mode_host shell_tool unified_exec shell_snapshot image_generation browser_use browser_use_external computer_use in_app_browser goals skill_search skill_mcp_dependency_install tool_suggest view_image sleep_tool workspace_dependencies hooks)
+codex-review.sh-56-disable_flags=(); for f in $disabled; do disable_flags+=(--disable "$f"); done
+codex-review.sh-57-workspace="$tmp/workspace"; mkdir -m 700 "$workspace"
+codex-review.sh-58-set +e
+codex-review.sh:59:env -u OPENAI_API_KEY -u CODEX_API_KEY perl -e 'alarm($ENV{CODEX_MAX_TIME_SECONDS} || 600); exec @ARGV' codex exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check -s read-only -C "$workspace" -m "$model" -c "model_reasoning_effort=\"$effort\"" -c 'web_search="disabled"' "${disable_flags[@]}" --json -o "$last" - < "$combined" > "$stdout" 2>> "$stderr"
+codex-review.sh-60-code=$?; set -e
+codex-review.sh:61:[[ $code -ne 142 ]] || fail 70 "Codex invocation timed out"
+codex-review.sh:62:[[ $code -eq 0 ]] || fail 70 "Codex invocation failed (exit $code)"
+codex-review.sh:63:jq -e 'select(.type == "turn.completed")' "$stdout" >/dev/null 2>&1 || fail 70 "Codex did not complete its turn"
+codex-review.sh:64:[[ -s "$last" ]] || fail 70 "Codex returned no final message"
+codex-review.sh:65:python3 "$(dirname "$0")/reviewer-validate.py" < "$last" || fail 70 "Codex response failed substance validation"
+codex-review.sh-66-# Startup notices (e.g. "code-mode host is disabled") are also error items;
+codex-review.sh-67-# only errors after the turn starts are tool attempts.
+codex-review.sh-68-blocked="$(jq -s '[foreach .[] as $e (false; . or ($e.type == "turn.started"); if . and $e.type == "item.completed" and $e.item.type == "error" then 1 else empty end)] | length' "$stdout" 2>/dev/null || print 0)"
+codex-review.sh:69:# codex exec does not report the serving model; the artifact records the
+codex-review.sh-70-# pinned request.
+codex-review.sh-71-usage="$(jq -sc '[.[] | select(.type == "turn.completed") | .usage] | last // null' "$stdout" 2>/dev/null || print null)"
+codex-review.sh-72-checks="$(python3 "$(dirname "$0")/reviewer-claims.py" < "$last")"
+codex-review.sh:73:{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
+codex-review.sh:74:chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Codex artifact or checksum was not created"; print "captured $output"

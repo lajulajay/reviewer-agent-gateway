@@ -1,0 +1,76 @@
+# Current wrappers reserve exits 70 and 74 for failures after invocation began.
+# Preflight failures use other exit codes. Kimi also records the boundary
+# explicitly, which takes precedence for interrupted calls.
+
+
+def spent_failure(d):
+    if d.get("exit_code") not in (70, 74):
+        return False
+    # A false flag with a model-sounding reason must not count.
+    if "model_invocation_began" in d:
+        return d.get("model_invocation_began") is True
+    return True
+
+
+def parse(name):
+    if name.endswith((".sha256", ".diagnostic.json")):
+        return None
+    m = NAME.match(name)
+    return (m.group(1), m.group(3), m.group(2)) if m else None
+
+
+def hard(provider, requested, selected, effort=""):
+    if provider == "kimi":
+        return requested == "hard" or selected.startswith("kimi-code/k3") or effort == "high"
+    return provider in ("claude", "codex") and (requested in ("opus", "hard") or "opus" in selected)
+
+
+def is_hard(path, provider):
+    head = path.read_text(errors="replace")[:2000]
+    m = re.search(r"(?m)^Requested model: (.+)$", head)
+    sel = re.search(r"(?m)^Selected model: (.+)$", head)
+    effort = re.search(r"(?m)^Reasoning effort: (.+)$", head)
+    return hard(
+        provider,
+        m.group(1).strip() if m else "",
+        sel.group(1).strip() if sel else "",
+        effort.group(1).strip() if effort else "",
+    )
+
+
+def rounds(collab):
+    """Yield (provider, topic, path, day, hard) for every counted round."""
+    for f in sorted(collab.iterdir()):
+        if not f.is_file():
+            continue
+        if f.name.endswith(".diagnostic.json"):
+            parsed = parse(f.name[: -len(".diagnostic.json")] + ".md")
+            if not parsed:
+                continue
+            try:
+                d = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if d.get("exit_code") in (70, 74) and spent_failure(d):
+                yield parsed[0], parsed[1], f, day(f, parsed), hard(
+                    parsed[0], d.get("requested_model") or "", d.get("selected_model") or "",
+                    d.get("reasoning_effort") or "")
+            continue
+        parsed = parse(f.name)
+        if parsed:
+            yield parsed[0], parsed[1], f, day(f, parsed), is_hard(f, parsed[0])
+
+
+def day(path, parsed):
+    """The date in the name; checkouts reset mtimes, so mtime is only a fallback."""
+    if parsed[2]:
+        return date.fromisoformat(parsed[2])
+    return datetime.fromtimestamp(path.stat().st_mtime).date()
+
+
+def main(argv):
+    if len(argv) != 4 or argv[1] not in PROVIDERS or argv[2] not in ("hard", "routine"):
+        print("usage: review-budget.py <claude|codex|gemini|kimi> <hard|routine> <output-path>", file=sys.stderr)
+        return 64
+    provider, tier, output = argv[1], argv[2], Path(argv[3])
+    policy = json.loads((Path(__file__).resolve().parent / "review-budget.json").read_text())

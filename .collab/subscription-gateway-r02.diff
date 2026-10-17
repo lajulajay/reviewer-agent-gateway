@@ -1,0 +1,485 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index ad2963e..819921d 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -24,7 +24,9 @@ Gemini are reviewer-only and never own work.
+   entries are never rewritten.
+ - **No self-review.** A change is reviewed only by an agent that did not
+   author it. Pass `--owner codex|claude` on every reviewer call: automatic
+-  selection excludes the owner, the Claude wrapper refuses `--owner claude`,
++  selection excludes the owner; for mixed-authorship packets, pass one
++  `--author codex|claude|kimi` per additional author so automatic selection
++  excludes them too. The Claude wrapper refuses `--owner claude`,
+   the Codex wrapper refuses `--owner codex`, and every wrapper records the
+   owner in its artifact.
+ - **Subscription roster.** `reviewer-roster.json` lists the currently active
+@@ -70,11 +72,13 @@ reviewers/gemini-review.sh --owner <codex|claude> <hard|routine> <prompt> .colla
+ 
+ Add `--packet-root <dir>` to use a shared prompt or packet from outside the
+ repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
+-before the model or tier.
++before the model or tier. For automatic selection of mixed-authorship work,
++repeat `--author <codex|claude|kimi>` for every author besides the owner.
+ 
+ For automatic selection, the `auto-` output name is a template; the artifact
+ uses the chosen provider's prefix. New topics go to the active, non-owner
+-reviewer with the fewest spent review rounds in that repository today and room
++and non-author reviewer with the fewest spent review rounds in that repository
++today and room
+ under that provider's daily cap, with roster order breaking ties. Follow-ups
+ stay with the topic's latest eligible reviewer when round records establish one
+ unambiguous reviewer; otherwise selection falls back to daily balancing. An
+@@ -82,7 +86,8 @@ existing artifact or diagnostic is never retried under the same name. This
+ local-history rule balances known gateway usage without pretending to measure
+ incomparable provider quotas. The dispatcher fails over only after preflight
+ exit 69 or 78, never after a model call, timeout, validation failure, or budget
+-refusal; if all candidates fail preflight, use Gemini.
++refusal; if all candidates fail preflight, use Gemini. The template date must
++be today's local date.
+ 
+ Choose the smallest sufficient tier and record the requested tier, selected
+ and resolved model(s), and a one-sentence rationale. The higher tier
+@@ -121,6 +126,9 @@ Every review call spends the user's plan usage, so the wrappers enforce
+ - **Output names** must be `<provider>-YYYY-MM-DD-<topic>[-rNN].md|json`;
+   the daily cap reads the date from the name. Automatic selection also accepts
+   an `auto-` template but writes the actual artifact with the provider prefix.
++  A refused attempt reserves its name, including budget refusals. If the user
++  approves a budget override, use a new `rNN` name and cite that round in the
++  Decisions entry.
+ 
+ Before requesting another round, the owner checks each finding against the
+ evidence. A finding that a script or test disproves is dispositioned
+@@ -135,8 +143,8 @@ nothing; the owner checks any quoted code against the packet before acting.
+ - Reviewers are read-only. They receive only explicit, sanitized packet
+   files and may not edit the repository, mutate production or external
+   services, trigger agent runs, place orders, or deploy. The wrappers launch
+-  reviewers with tool and subagent access disabled and fail closed if a tool
+-  event appears in the provider stream.
++  reviewers with provider-specific tool restrictions; Kimi's custom agent
++  disables tools and subagents, and its wrapper rejects emitted tool events.
+ - Give the smallest sufficient packet: exact files or line ranges, the diff
+   or commit range, relevant evidence and invariants, the competing claims,
+   the exact decision, prohibited actions, and named questions. Do not ask for
+diff --git a/README.md b/README.md
+index a89c1c8..264072d 100644
+--- a/README.md
++++ b/README.md
+@@ -14,7 +14,7 @@ Invocation contract:
+ 
+ ```text
+ reviewer.sh [--packet-root DIR] [--owner codex|claude] MODEL PROMPT OUTPUT PACKET...
+-auto-review.sh [--packet-root DIR] --owner codex|claude <hard|routine> PROMPT AUTO_OUTPUT PACKET...
++auto-review.sh [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> PROMPT AUTO_OUTPUT PACKET...
+ ```
+ 
+ The target repository is derived from the output path. Inputs outside it are
+@@ -33,6 +33,9 @@ compatibility on direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires
+ it: the Claude wrapper refuses `--owner claude`, the Codex wrapper refuses
+ `--owner codex`, and every wrapper records the owner in its artifact or
+ diagnostic. Automatic selection requires `--owner` and excludes that reviewer.
++For a packet with additional authors, repeat `--author` for each of them;
++automatic selection excludes every named author. Do not use automatic selection
++for mixed-authorship work unless all authors are named.
+ 
+ Active roles: Codex and Claude interchangeably own work; Kimi is reviewer-only.
+ Kimi, Claude, and Codex are official reviewers when active in
+@@ -42,7 +45,8 @@ and restore it when renewed; `tie_break_order` must continue to list all three
+ subscription reviewers.
+ 
+ `auto-review.sh` chooses among active subscription reviewers other than the
+-owner and not already at the repository's per-provider daily cap. For a new
++owner and additional authors, and not already at the repository's per-provider
++daily cap. For a new
+ topic it selects the reviewer with the fewest spent gateway review rounds today,
+ using roster order to break ties. A follow-up stays with the topic's latest
+ eligible reviewer when round numbering establishes one unambiguous reviewer; if
+@@ -50,7 +54,9 @@ the latest reviewer is inactive, capped, or ambiguous, selection falls back to
+ daily balancing. The `auto-YYYY-MM-DD-<topic>[-rNN].md` argument is a naming
+ template: the successful artifact uses the selected provider's prefix. Both the
+ template and candidate outputs reject an existing artifact or diagnostic, so a
+-failed request cannot be retried under the same name.
++failed request cannot be retried under the same name. The template date must
++be today's local date. A user-approved budget override after a refusal uses a
++new `rNN` name; the workstream Decisions entry must approve that new round.
+ 
+ This is deterministic local load balancing, not a claim to know each provider's
+ remaining quota. Claude and Kimi expose usage interactively and Codex exposes
+@@ -99,8 +105,10 @@ never attempts a tool produces no observable denial. The wrapper therefore
+ fails closed if the JSONL stream contains an Assistant `tool_calls` event, Tool
+ message, or defensive tool-call field — a real emission, observed in positive
+ allow-tool probes, is rejected. The prompt and
+-packets are inlined, capped by `KIMI_MAX_PROMPT_BYTES` (default 800000 bytes),
++packets are inlined, capped by `KIMI_MAX_PROMPT_BYTES` (default 100000 bytes),
+ and bounded by `KIMI_MAX_TIME_SECONDS` (default 900 seconds).
++The inlined packet is passed as a CLI argument and can appear in local process
++listings while the review runs.
+ 
+ Kimi Code is documented to persist session records under
+ `$KIMI_CODE_HOME/sessions/` (normally `~/.kimi-code/sessions/`); those records
+diff --git a/auto-review.sh b/auto-review.sh
+index 3f5bc19..ce2fd80 100755
+--- a/auto-review.sh
++++ b/auto-review.sh
+@@ -2,15 +2,16 @@
+ set -euo pipefail
+ umask 077
+ 
+-packet_root=""; owner=""
++packet_root=""; owner=""; authors=()
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+     --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
++    --author) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude || "$2" == kimi ) ]] || { print -u2 -- "--author must be codex, claude, or kimi"; exit 64; }; authors+=("$2"); shift 2 ;;
+     *) print -u2 "unknown option: $1"; exit 64 ;;
+   esac
+ done
+-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <hard|routine> <prompt-file> <auto-output.md> <packet-file>..."; exit 64; }
++[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> <prompt-file> <auto-output.md> <packet-file>..."; exit 64; }
+ tier="$1"; prompt="$2"; output="$3"; shift 3
+ [[ "$tier" == hard || "$tier" == routine ]] || { print -u2 "automatic review tier must be hard or routine"; exit 64; }
+ [[ -n "$owner" ]] || { print -u2 "--owner is required for automatic reviewer selection"; exit 64; }
+@@ -28,9 +29,8 @@ if git -C "$gateway" rev-parse --git-dir >/dev/null 2>&1; then
+   wrapper_dirty="$(git -C "$gateway" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || { print -u2 "cannot read gateway status"; exit 78; }
+   [[ -z "$wrapper_dirty" ]] || { print -u2 "gateway wrapper files have uncommitted changes"; exit 78; }
+ fi
+-roster="${REVIEWER_ROSTER:-$gateway/reviewer-roster.json}"
+ set +e
+-selection="$(python3 "$gateway/reviewer-select.py" "$roster" "$owner" "$output" 2>&1)"
++selection="$(python3 "$gateway/reviewer-select.py" "$gateway/reviewer-roster.json" "$owner" "$output" "${authors[@]}" 2>&1)"
+ code=$?
+ set -e
+ [[ $code -eq 0 ]] || { print -u2 "$selection"; exit "$code"; }
+diff --git a/kimi-review.sh b/kimi-review.sh
+index 9420d09..5221e3c 100755
+--- a/kimi-review.sh
++++ b/kimi-review.sh
+@@ -61,7 +61,7 @@ kimi_version="$(kimi --version 2>> "$stderr" | head -1)" || fail 69 "Kimi Code v
+ 
+ TOOLS: None are available. Review only the text above.
+ "; cat "$(dirname "$0")/output-contract.txt"; } > "$combined"
+-max_prompt_bytes="${KIMI_MAX_PROMPT_BYTES:-800000}"
++max_prompt_bytes="${KIMI_MAX_PROMPT_BYTES:-100000}"
+ [[ "$max_prompt_bytes" == <-> && "$max_prompt_bytes" -ge 1 ]] || fail 64 "KIMI_MAX_PROMPT_BYTES must be a positive integer"
+ prompt_bytes="$(wc -c < "$combined" | tr -d ' ')"
+ [[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (kimi takes the prompt as an argument)"
+diff --git a/review-budget.py b/review-budget.py
+index 9511432..04ea890 100755
+--- a/review-budget.py
++++ b/review-budget.py
+@@ -27,19 +27,16 @@ from pathlib import Path
+ 
+ PROVIDERS = ("claude", "codex", "gemini", "kimi")
+ NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
+-# Calls that fail after model invocation begins are counted conservatively.
+-# Preflight failures (authentication, availability, budget refusal) are not.
+-# Providers that record an explicit model_invocation_began flag (Kimi) are
+-# counted on that flag alone; the reason regex covers the other providers.
+-SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed|output-token limit")
++# Current wrappers reserve exits 70 and 74 for failures after invocation began.
++# Preflight failures use other exit codes. Kimi also records the boundary
++# explicitly, which takes precedence for interrupted calls.
+ 
+ 
+ def spent_failure(d):
+-    # Providers that record model_invocation_began (Kimi) are decided by the
+-    # flag alone; a false flag with a model-sounding reason must not count.
++    # A false flag with a model-sounding reason must not count.
+     if "model_invocation_began" in d:
+         return d.get("model_invocation_began") is True
+-    return bool(SPENT.search(d.get("reason", "")))
++    return True
+ 
+ 
+ def parse(name):
+diff --git a/reviewer-select.py b/reviewer-select.py
+index 16a2915..ea87923 100644
+--- a/reviewer-select.py
++++ b/reviewer-select.py
+@@ -40,9 +40,9 @@ def _topic(output):
+     if not output.name.startswith("auto-"):
+         raise ValueError("automatic output name must start with auto-")
+     parsed = budget.parse("kimi-" + output.name[len("auto-") :])
+-    if not parsed:
++    if not parsed or not parsed[2]:
+         raise ValueError("output name must be auto-YYYY-MM-DD-<topic>[-rNN].md")
+-    return parsed[1]
++    return parsed[1], date.fromisoformat(parsed[2])
+ 
+ 
+ def _round_number(path):
+@@ -75,20 +75,25 @@ def _latest_eligible(topic_rounds, available):
+     return provider if provider in available else None
+ 
+ 
+-def order(policy_path, owner, output, today=None):
++def order(policy_path, owner, output, today=None, authors=()):
+     """Return provider names in invocation order for an auto-* output path."""
+     if owner not in OWNERS:
+         raise ValueError("owner must be codex or claude")
++    if any(author not in SUBSCRIPTION_REVIEWERS for author in authors):
++        raise ValueError("authors may contain only claude, codex, and kimi")
+     output = Path(output)
+     active, tie_order = load_roster(Path(policy_path))
+-    eligible = [provider for provider in tie_order if provider in active and provider != owner]
++    excluded = {owner, *authors}
++    eligible = [provider for provider in tie_order if provider in active and provider not in excluded]
+     if not eligible:
+         raise ValueError("no eligible active subscription reviewer; use gemini-review.sh")
+     if not output.parent.is_dir():
+         raise ValueError(f"output directory does not exist: {output.parent}")
+-    topic = _topic(output)
++    topic, output_day = _topic(output)
+     history = list(budget.rounds(output.parent))
+     today = today or date.today()
++    if output_day != today:
++        raise ValueError(f"automatic output date must be today ({today.isoformat()})")
+     counts = {
+         provider: sum(1 for round_ in history if round_[0] == provider and round_[3] == today)
+         for provider in eligible
+@@ -107,11 +112,11 @@ def order(policy_path, owner, output, today=None):
+ 
+ 
+ def main(argv):
+-    if len(argv) != 4:
+-        print("usage: reviewer-select.py ROSTER_JSON <codex|claude> AUTO_OUTPUT_PATH", file=sys.stderr)
++    if len(argv) < 4:
++        print("usage: reviewer-select.py ROSTER_JSON <codex|claude> AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...]", file=sys.stderr)
+         return 64
+     try:
+-        for provider in order(Path(argv[1]), argv[2], Path(argv[3])):
++        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=argv[4:]):
+             print(provider)
+         return 0
+     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+diff --git a/tests/test_reviewer_select.py b/tests/test_reviewer_select.py
+index de31563..bbe6e62 100644
+--- a/tests/test_reviewer_select.py
++++ b/tests/test_reviewer_select.py
+@@ -34,8 +34,8 @@ class ReviewerSelectTest(unittest.TestCase):
+     def output(self, name="auto-2026-10-16-new.md"):
+         return self.collab / name
+ 
+-    def select(self, owner="codex", name="auto-2026-10-16-new.md"):
+-        return selector.order(self.roster, owner, self.output(name), today=TODAY)
++    def select(self, owner="codex", name="auto-2026-10-16-new.md", authors=()):
++        return selector.order(self.roster, owner, self.output(name), today=TODAY, authors=authors)
+ 
+     def artifact(self, name):
+         (self.collab / name).write_text("")
+@@ -58,6 +58,17 @@ class ReviewerSelectTest(unittest.TestCase):
+         with self.assertRaisesRegex(ValueError, "must contain claude, codex, and kimi"):
+             self.select()
+ 
++    def test_additional_authors_are_excluded(self):
++        self.assertEqual(self.select(authors=("kimi",)), ["claude"])
++        with self.assertRaisesRegex(ValueError, "no eligible"):
++            self.select(authors=("kimi", "claude"))
++        with self.assertRaisesRegex(ValueError, "authors may contain"):
++            self.select(authors=("gemini",))
++
++    def test_template_date_must_be_today(self):
++        with self.assertRaisesRegex(ValueError, "date must be today"):
++            self.select(name="auto-2026-10-15-new.md")
++
+     def test_inactive_subscriptions_and_empty_eligible_set(self):
+         self.write_roster(active=("claude", "codex"))
+         self.assertEqual(self.select("codex"), ["claude"])
+@@ -201,6 +212,7 @@ class AutoReviewTest(unittest.TestCase):
+         (self.repo / "prompt.md").write_text("Review prompt.\n")
+         (self.repo / "packet.md").write_text("Safe packet.\n")
+         self.log = self.base / "calls.log"
++        self.day = date.today().isoformat()
+         self.log.write_text("")
+         self.git("init", "-q")
+         self.git("add", "-A")
+@@ -212,21 +224,23 @@ class AutoReviewTest(unittest.TestCase):
+     def git(self, *args):
+         subprocess.run(["git", "-C", str(self.gateway), *args], check=True, capture_output=True)
+ 
+-    def run_auto(self, *extra_env, tier="routine", owner="codex", name="auto-2026-10-16-topic.md", roster=None):
++    def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=()):
+         env = os.environ.copy()
+         env["AUTO_MOCK_LOG"] = str(self.log)
+-        for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE", "REVIEWER_ROSTER"):
++        for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE"):
+             env.pop(key, None)
+         for assignment in extra_env:
+             key, value = assignment.split("=", 1)
+             env[key] = value
+         if roster is not None:
+-            path = self.base / "custom-roster.json"
+-            path.write_text(json.dumps(roster))
+-            env["REVIEWER_ROSTER"] = str(path)
++            (self.gateway / "reviewer-roster.json").write_text(json.dumps(roster))
++            self.git("add", "reviewer-roster.json")
++            self.git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "test roster")
++        name = name or f"auto-{self.day}-topic.md"
+         output = self.collab / name
+         result = subprocess.run(
+-            [str(self.gateway / "auto-review.sh"), "--owner", owner, tier,
++            [str(self.gateway / "auto-review.sh"), "--owner", owner,
++             *(arg for author in authors for arg in ("--author", author)), tier,
+              str(self.repo / "prompt.md"), str(output), str(self.repo / "packet.md")],
+             capture_output=True,
+             text=True,
+@@ -240,16 +254,21 @@ class AutoReviewTest(unittest.TestCase):
+     def test_auto_uses_first_eligible_reviewer_and_provider_artifact(self):
+         result = self.run_auto()
+         self.assertEqual(result.returncode, 0, result.stderr)
+-        self.assertEqual(self.calls(), ["kimi|routine|kimi-2026-10-16-topic.md"])
+-        self.assertTrue((self.collab / "kimi-2026-10-16-topic.md").is_file())
+-        self.assertFalse((self.collab / "auto-2026-10-16-topic.md").exists())
++        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-topic.md"])
++        self.assertTrue((self.collab / f"kimi-{self.day}-topic.md").is_file())
++        self.assertFalse((self.collab / f"auto-{self.day}-topic.md").exists())
++
++    def test_auto_excludes_kimi_coauthor(self):
++        result = self.run_auto(authors=("kimi",))
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
+ 
+     def test_preflight_failure_fails_over_and_maps_claude_hard_tier(self):
+         result = self.run_auto("AUTO_MOCK_KIMI_CODE=69", tier="hard")
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(self.calls(), [
+-            "kimi|hard|kimi-2026-10-16-topic.md",
+-            "claude|opus|claude-2026-10-16-topic.md",
++            f"kimi|hard|kimi-{self.day}-topic.md",
++            f"claude|opus|claude-{self.day}-topic.md",
+         ])
+         self.assertIn("trying the next eligible reviewer", result.stderr)
+ 
+@@ -257,33 +276,34 @@ class AutoReviewTest(unittest.TestCase):
+         roster = {"active_reviewers": ["claude"], "tie_break_order": ["kimi", "claude", "codex"]}
+         result = self.run_auto(roster=roster)
+         self.assertEqual(result.returncode, 0, result.stderr)
+-        self.assertEqual(self.calls(), ["claude|sonnet|claude-2026-10-16-topic.md"])
++        self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
+ 
+     def test_model_failure_and_budget_refusal_are_not_retried(self):
+         for code in (70, 79):
+             with self.subTest(code=code):
+                 self.log.write_text("")
+-                result = self.run_auto(f"AUTO_MOCK_KIMI_CODE={code}", name=f"auto-2026-10-16-topic-{code}.md")
++                result = self.run_auto(f"AUTO_MOCK_KIMI_CODE={code}", name=f"auto-{self.day}-topic-{code}.md")
+                 self.assertEqual(result.returncode, code)
+-                self.assertEqual(self.calls(), [f"kimi|routine|kimi-2026-10-16-topic-{code}.md"])
++                self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-topic-{code}.md"])
+                 self.assertNotIn("trying the next eligible reviewer", result.stderr)
++                (self.collab / f"kimi-{self.day}-topic-{code}.diagnostic.json").unlink()
+ 
+     def test_existing_candidate_diagnostic_is_not_retried(self):
+-        name = "auto-2026-10-16-attempt-once.md"
++        name = f"auto-{self.day}-attempt-once.md"
+         result = self.run_auto("AUTO_MOCK_KIMI_CODE=70", name=name)
+         self.assertEqual(result.returncode, 70)
+-        self.assertEqual(self.calls(), ["kimi|routine|kimi-2026-10-16-attempt-once.md"])
++        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-attempt-once.md"])
+         result = self.run_auto(name=name)
+         self.assertEqual(result.returncode, 65)
+-        self.assertEqual(self.calls(), ["kimi|routine|kimi-2026-10-16-attempt-once.md"])
++        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-attempt-once.md"])
+         self.assertIn("reserved by", result.stderr)
+ 
+     def test_all_preflight_failures_end_with_gemini_fallback_instruction(self):
+         result = self.run_auto("AUTO_MOCK_KIMI_CODE=69", "AUTO_MOCK_CLAUDE_CODE=78")
+         self.assertEqual(result.returncode, 78)
+         self.assertEqual(self.calls(), [
+-            "kimi|routine|kimi-2026-10-16-topic.md",
+-            "claude|sonnet|claude-2026-10-16-topic.md",
++            f"kimi|routine|kimi-{self.day}-topic.md",
++            f"claude|sonnet|claude-{self.day}-topic.md",
+         ])
+         self.assertIn("use gemini-review.sh as the fallback reviewer", result.stderr)
+ 
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index 281b918..ef94d96 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -553,8 +553,8 @@ set -e
+ jq -e '.reason == "Kimi invocation interrupted before model invocation began (SIGTERM)"' \
+   "$kimi_repo/.collab/kimi-$today-interrupt-r01.diagnostic.json" >/dev/null
+ [[ "$(python3 "$root/review-budget.py" kimi routine "$kimi_repo/.collab/kimi-$today-interrupt-r02.md")" == "0 0" ]]
+-# A Kimi failure after invocation began counts as spent even when the reason
+-# has no SPENT keyword (codex r01 F1): the model_invocation_began flag decides.
++# A Kimi failure after invocation began counts as spent; its explicit
++# model_invocation_began flag decides even when the reason text is unusual.
+ jq -n '{provider:"kimi",exit_code:70,reason:"Kimi assistant response extraction failed",requested_model:"routine",selected_model:"kimi-code/k3",reasoning_effort:"high",model_invocation_began:true}' \
+   > "$broot/.collab/kimi-$today-extract-r01.diagnostic.json"
+ [[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-extract-r02.md")" == "1 1" ]]
+@@ -565,6 +565,12 @@ jq -n '{provider:"kimi",exit_code:78,reason:"Kimi invocation interrupted before
+ jq -n '{provider:"kimi",exit_code:70,reason:"Kimi invocation returned nonzero after model invocation began (exit 42)",model_invocation_began:false}' \
+   > "$broot/.collab/kimi-$today-falseflag-r01.diagnostic.json"
+ [[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-falseflag-r02.md")" == "0 0" ]]
++jq -n '{provider:"claude",exit_code:70,reason:"Claude invocation failed",requested_model:"sonnet"}' \
++  > "$broot/.collab/claude-$today-claudefail-r01.diagnostic.json"
++[[ "$(python3 "$root/review-budget.py" claude routine "$broot/.collab/claude-$today-claudefail-r02.md")" == "1 1" ]]
++jq -n '{provider:"codex",exit_code:70,reason:"Codex invocation failed (exit 1)",requested_model:"routine"}' \
++  > "$broot/.collab/codex-$today-codexfail-r01.diagnostic.json"
++[[ "$(python3 "$root/review-budget.py" codex routine "$broot/.collab/codex-$today-codexfail-r02.md")" == "1 1" ]]
+ jq -n '{provider:"gemini",exit_code:70,reason:"Gemini hit the output-token limit before finishing the review; split the packet or send a delta"}' \
+   > "$broot/.collab/gemini-$today-cutoff-r01.diagnostic.json"
+ [[ "$(python3 "$root/review-budget.py" gemini routine "$broot/.collab/gemini-$today-cutoff-r02.json")" == "1 1" ]]
+diff --git a/workstreams/2026-10-17-subscription-gateway.md b/workstreams/2026-10-17-subscription-gateway.md
+new file mode 100644
+index 0000000..0e702ec
+--- /dev/null
++++ b/workstreams/2026-10-17-subscription-gateway.md
+@@ -0,0 +1,56 @@
++# Subscription reviewer gateway
++
++Workstream: 2026-10-17-subscription-gateway
++Owner: Codex (2026-10-17, assigned by the user after Kimi reached its usage limit)
++Status: active
++Branch: main
++Operational: no
++Links: [protocol](../PROTOCOL.md), [implementation](../README.md)
++
++## Brief
++
++Complete Kimi's partial implementation of managed-OAuth Kimi Code reviews and
++automatic subscription reviewer selection. Preserve independent review,
++tool-free reviewer execution, and per-topic and daily budgets. No production
++service is changed.
++
++## Decisions
++
++- 2026-10-17, user, scope: this gateway change. Quote: "Kimi began making
++  changes to the reviewer-agent-gateway but hit its usage limit. i want you
++  to take over as owner and complete its changes". Codex is the owner;
++  Kimi remains an author of the initial change and cannot review it.
++
++## Reviews
++
++| Round | Reviewer | Tier | Artifact | Verdict |
++| :--- | :--- | :--- | :--- | :--- |
++| r01 | Claude | opus | `.collab/claude-2026-10-17-subscription-gateway-r01.md` | ACCEPT WITH CONDITIONS |
++
++## Findings and conditions
++
++| ID | Severity | Disposition | Status |
++| :--- | :--- | :--- | :--- |
++| F1 | major | fixed: explicit additional authors excluded by auto selection | pending r02 |
++| F2 | major | rejected: Claude/Codex exits 69 and 78 occur before their model calls | pending r02 |
++| F3 | major | narrowed claim to documented CLI controls; live probe unavailable at Kimi usage limit | pending r02 |
++| F4 | minor | fixed: all non-Kimi exit 70/74 failures now count; protocol wording narrowed | pending r02 |
++| F5 | minor | fixed: auto template date must be today's local date | pending r02 |
++| F6 | minor | documented: budget override uses a fresh rNN name | pending r02 |
++| F7 | minor | fixed: uncommitted roster environment override removed | pending r02 |
++| F8 | minor | mitigated: prompt cap lowered to 100000 bytes; process-list exposure documented | pending r02 |
++| F9 | minor | documented limitation: serving model is not reported | pending r02 |
++| C1 | condition | fixed with additional author exclusions | pending r02 |
++| C2 | condition | wrapper exit-code locations checked | pending r02 |
++| C3 | condition | official Kimi docs checked; live negative probe unavailable at usage limit | pending r02 |
++| C4 | condition | fixed with today-only template and test | pending r02 |
++| C5 | condition | protocol and README corrected | pending r02 |
++
++## Log
++
++- 2026-10-17: Codex completed Kimi's partial changes, corrected follow-up
++  selection for an ineligible latest reviewer, and committed c654e44. The
++  provider-free suites passed.
++- 2026-10-17: Claude r01 found budget accounting, author exclusion, and
++  documentation issues. Codex fixed the code and tests and is preparing a
++  routine follow-up review.

@@ -1,0 +1,7 @@
+Focused follow-up on the subscription gateway, owner Codex. Claude r01 was ACCEPT WITH CONDITIONS. Claude r02 reached the model but was rejected by the output contract because it labeled resolved items as findings with severity `[resolved]`. Its diagnostic response (attached) acknowledged the author, date, roster, and exit-code fixes; it questioned whether exit 69/78 preflight diagnostics might now count as spent.
+
+The attached commit 800b234 makes `spent_failure()` explicitly return false for every exit except 70/74 and adds provider-free tests proving Claude exit 78 and Codex exit 69 preflight diagnostics count as zero rounds. The full `rounds()` code excerpt shows the existing 70/74 filter. The wrapper smoke suite, selector tests, docs tests, shell syntax, and diff checks pass.
+
+Please assess only whether the budget change closes that remaining concrete risk or creates another decision-material defect. The r02 response's suggestions to reject `--author` equal to `--owner` and mechanically enforce a fresh `rNN` are optional: the former is a harmless set duplicate, and the latter is a documented user-override procedure. A live Kimi probe cannot run while its usage limit is exhausted; do not require it for this focused budget review.
+
+Output contract: use `F1 [blocker]`, `F1 [major]`, or `F1 [minor]` only for NEW actionable findings. State resolved items in ordinary prose without an `F# [resolved]` pattern. End with the required attestation and one final verdict line.

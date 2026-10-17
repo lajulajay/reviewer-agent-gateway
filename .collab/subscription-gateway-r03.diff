@@ -1,0 +1,50 @@
+diff --git a/review-budget.py b/review-budget.py
+index 04ea890..9a0995c 100755
+--- a/review-budget.py
++++ b/review-budget.py
+@@ -33,6 +33,8 @@ NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$
+ 
+ 
+ def spent_failure(d):
++    if d.get("exit_code") not in (70, 74):
++        return False
+     # A false flag with a model-sounding reason must not count.
+     if "model_invocation_began" in d:
+         return d.get("model_invocation_began") is True
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index ef94d96..eea8081 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -571,6 +571,12 @@ jq -n '{provider:"claude",exit_code:70,reason:"Claude invocation failed",request
+ jq -n '{provider:"codex",exit_code:70,reason:"Codex invocation failed (exit 1)",requested_model:"routine"}' \
+   > "$broot/.collab/codex-$today-codexfail-r01.diagnostic.json"
+ [[ "$(python3 "$root/review-budget.py" codex routine "$broot/.collab/codex-$today-codexfail-r02.md")" == "1 1" ]]
++jq -n '{provider:"claude",exit_code:78,reason:"Claude model selection failed",requested_model:"sonnet"}' \
++  > "$broot/.collab/claude-$today-claudepreflight-r01.diagnostic.json"
++[[ "$(python3 "$root/review-budget.py" claude routine "$broot/.collab/claude-$today-claudepreflight-r02.md")" == "0 0" ]]
++jq -n '{provider:"codex",exit_code:69,reason:"codex CLI not found",requested_model:"routine"}' \
++  > "$broot/.collab/codex-$today-codexpreflight-r01.diagnostic.json"
++[[ "$(python3 "$root/review-budget.py" codex routine "$broot/.collab/codex-$today-codexpreflight-r02.md")" == "0 0" ]]
+ jq -n '{provider:"gemini",exit_code:70,reason:"Gemini hit the output-token limit before finishing the review; split the packet or send a delta"}' \
+   > "$broot/.collab/gemini-$today-cutoff-r01.diagnostic.json"
+ [[ "$(python3 "$root/review-budget.py" gemini routine "$broot/.collab/gemini-$today-cutoff-r02.json")" == "1 1" ]]
+diff --git a/workstreams/2026-10-17-subscription-gateway.md b/workstreams/2026-10-17-subscription-gateway.md
+index 0e702ec..7ccbdcc 100644
+--- a/workstreams/2026-10-17-subscription-gateway.md
++++ b/workstreams/2026-10-17-subscription-gateway.md
+@@ -26,6 +26,7 @@ service is changed.
+ | Round | Reviewer | Tier | Artifact | Verdict |
+ | :--- | :--- | :--- | :--- | :--- |
+ | r01 | Claude | opus | `.collab/claude-2026-10-17-subscription-gateway-r01.md` | ACCEPT WITH CONDITIONS |
++| r02 | Claude | sonnet | `.collab/claude-2026-10-17-subscription-gateway-r02.diagnostic.json` | invalid severity; no accepted artifact |
+ 
+ ## Findings and conditions
+ 
+@@ -54,3 +55,7 @@ service is changed.
+ - 2026-10-17: Claude r01 found budget accounting, author exclusion, and
+   documentation issues. Codex fixed the code and tests and is preparing a
+   routine follow-up review.
++- 2026-10-17: Claude r02 reached the model but the gateway rejected its
++  unsupported `[resolved]` severity labels. Its diagnostic raised a question
++  about preflight failures; the budget code now guards exit codes explicitly,
++  and provider-free tests cover exit 69 and 78 as unspent.
