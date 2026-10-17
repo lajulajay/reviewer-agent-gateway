@@ -38,28 +38,62 @@ if [[ "${CLAUDE_TEST_MODE:-}" == success ]]; then
 fi
 exit 42
 EOF
-cat > "$test_root/bin/ollama" <<'EOF'
+cat > "$test_root/bin/kimi" <<'EOF'
 #!/bin/zsh
-if [[ "$1" == list ]]; then
-  print 'NAME ID SIZE MODIFIED'
-  print 'kimi-k2.6:cloud test - now'
+if [[ "$1" == provider && "$2" == list && "$3" == --json ]]; then
+  if [[ "${KIMI_MOCK_AUTH:-oauth}" == hang-provider ]]; then
+    [[ -z "${KIMI_PROVIDER_HANG_MARKER:-}" ]] || : > "$KIMI_PROVIDER_HANG_MARKER"
+    sleep 30
+  fi
+  case "${KIMI_MOCK_AUTH:-oauth}" in
+    oauth) provider='{"type":"kimi","oauth":{"account":"subscription"}}' ;;
+    empty_oauth) provider='{"type":"kimi","oauth":{}}' ;;
+    api_key) provider='{"type":"kimi","api_key":"configured"}' ;;
+    signed_out) provider='{"type":"kimi"}' ;;
+    wrong_provider) provider='{"type":"custom","oauth":{"account":"other"}}' ;;
+  esac
+  jq -n --argjson provider "$provider" '{models:{"kimi-code/k3":{provider:"managed:kimi-code"},"kimi-code/kimi-for-coding":{provider:"managed:kimi-code"}},providers:{"managed:kimi-code":$provider}}'
   exit 0
 fi
-[[ "$1" == run && "$2" == kimi-k2.6:cloud ]] || exit 64
-if [[ "${OLLAMA_TEST_MODE:-}" == success ]]; then
-  cat >/dev/null
-  for i in {1..8}; do
-    print 'Finding: the supplied packet is internally consistent, its stated invariants are testable, no unsafe state mutation is requested, and the implementation should preserve the reviewed input boundaries and independently verifiable artifact contract.'
-  done
-  print 'ATTESTATION: all actionable findings and conditions are labeled.'
-  print 'VERDICT: ACCEPT'
-  exit 0
-fi
-if [[ "${OLLAMA_TEST_MODE:-}" == subscription ]]; then
-  print -u2 'Error: 403 Forbidden: this model requires a subscription, upgrade for access'
-  exit 1
-fi
-print -u2 'simulated Ollama failure'
+[[ "$1" != --version ]] || { print 'kimi 2.2.0'; exit 0; }
+all_args="$*"; model=""; agent=""; skills=""; prompt=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) model="$2"; shift 2 ;;
+    --agent-file) agent="$2"; shift 2 ;;
+    --skills-dir) skills="$2"; shift 2 ;;
+    --prompt) prompt="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -z "${KIMI_MOCK_ARGS:-}" ]] || print -r -- "$all_args" > "$KIMI_MOCK_ARGS"
+[[ -z "${KIMI_MOCK_PROMPT:-}" ]] || print -r -- "$prompt" > "$KIMI_MOCK_PROMPT"
+[[ -z "${KIMI_MOCK_MARKER:-}" ]] || print -r -- "model=$model effort=${KIMI_MODEL_THINKING_EFFORT:-}" > "$KIMI_MOCK_MARKER"
+[[ -n "$model" && -n "$agent" && -n "$skills" && -n "$prompt" && " $all_args " == *" --output-format stream-json "* ]] || exit 77
+[[ -z "$(ls -A)" && -d "$skills" && -z "$(ls -A "$skills")" ]] || exit 77
+grep -Fx 'tools: []' "$agent" >/dev/null && grep -Fx 'subagents: []' "$agent" >/dev/null || exit 77
+[[ "${KIMI_CODE_NO_AUTO_UPDATE:-}" == 1 && "${KIMI_DISABLE_CRON:-}" == 1 && "${KIMI_LOOP_MAX_STEPS_PER_TURN:-}" == 1 ]] || exit 77
+[[ -z "${KIMI_API_KEY:-}" && -z "${MOONSHOT_API_KEY:-}" && -z "${KIMI_MODEL_NAME:-}" && -z "${KIMI_MODEL_BASE_URL:-}" ]] || exit 77
+[[ "${KIMI_TEST_MODE:-}" != hang ]] || sleep 30
+case "${KIMI_TEST_MODE:-}" in
+  success|tool|schema-tool|incomplete)
+    jq -nc '{role:"assistant",content:"draft"}'
+    if [[ "${KIMI_TEST_MODE:-}" == tool ]]; then
+      jq -nc '{role:"assistant",content:"",tool_calls:[{name:"shell"}]}'
+      jq -nc '{role:"tool",name:"shell",content:"blocked"}'
+    fi
+    [[ "${KIMI_TEST_MODE:-}" != schema-tool ]] || jq -nc '{type:"tool_call",name:"shell"}'
+    body=""
+    if [[ "${KIMI_TEST_MODE:-}" == incomplete ]]; then
+      body="partial"
+    else
+      for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
+      body+=$'The implementation preserves the reviewed input boundary and creates an auditable artifact.\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
+    fi
+    jq -nc --arg content "$body" '{role:"assistant",content:$content}'
+    exit 0 ;;
+esac
+print -u2 'simulated Kimi invocation failure'
 exit 42
 EOF
 cat > "$test_root/bin/agy" <<'EOF'
@@ -133,7 +167,7 @@ case "${CODEX_TEST_MODE:-}" in
 esac
 exit 42
 EOF
-chmod 755 "$test_root/bin/claude" "$test_root/bin/ollama" "$test_root/bin/agy" "$test_root/bin/codex"
+chmod 755 "$test_root/bin/claude" "$test_root/bin/kimi" "$test_root/bin/agy" "$test_root/bin/codex"
 cat > "$test_root/claude-policy.json" <<'EOF'
 {"hard_model":"claude-opus-5-5","routine_two_releases_down_scope":"all_models","models_newest_first":[
   {"id":"claude-sonnet-5-5","released_on":"2026-09-28","included_no_credits":true},
@@ -155,7 +189,7 @@ EOF
 # This fixture deliberately passes no arguments, so it cannot invoke a provider.
 consumer_root="$test_root/prediction-markets/shim-consumer"
 mkdir -p "$consumer_root/reviewers" "$test_root/reviewer-agent-gateway"
-for wrapper in claude-review.sh codex-review.sh gemini-review.sh kimi-review.sh; do
+for wrapper in claude-review.sh codex-review.sh gemini-review.sh kimi-review.sh auto-review.sh; do
   cp "$root/$wrapper" "$test_root/reviewer-agent-gateway/$wrapper"
   cat > "$consumer_root/reviewers/$wrapper" <<EOF
 #!/bin/zsh
@@ -182,10 +216,19 @@ run_failure() {
   [[ -s "$test_root/.collab/${output%.md}.diagnostic.json" || -s "$test_root/.collab/${output%.json}.diagnostic.json" ]]
 }
 
-run_failure kimi-review.sh kimi-k2.6:cloud kimi.md
-: > "$test_root/.collab/claude.md.diagnostic.json"
+run_failure kimi-review.sh routine kimi.md
 run_failure claude-review.sh sonnet claude.md
 run_failure gemini-review.sh hard gemini.json
+# A diagnostic from a previous attempt is refused before the provider runs.
+claude_refused_args="$test_root/claude-refused-args"; : > "$claude_refused_args"
+set +e
+PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
+  CLAUDE_MOCK_ARGS="$claude_refused_args" \
+  "$root/claude-review.sh" sonnet "$test_root/prompt.md" \
+  "$test_root/.collab/claude.md" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 65 && ! -s "$claude_refused_args" ]]
 
 # Tier selection pins a full model ID and checks what Claude reports using.
 claude_marker="$test_root/claude-marker"
@@ -343,7 +386,7 @@ owner_rejects() {
 owner_rejects "$root/claude-review.sh" --owner claude sonnet "$test_root/prompt.md" "$test_root/.collab/self-claude.md" "$test_root/packet/source.md"
 owner_rejects "$root/codex-review.sh" --owner codex hard "$test_root/prompt.md" "$test_root/.collab/self-codex.md" "$test_root/packet/source.md"
 owner_rejects "$root/gemini-review.sh" --owner gemini pro "$test_root/prompt.md" "$test_root/.collab/bad-owner.json" "$test_root/packet/source.md"
-owner_rejects "$root/kimi-review.sh" --reviewer kimi kimi-k2.6:cloud "$test_root/prompt.md" "$test_root/.collab/bad-option.md" "$test_root/packet/source.md"
+owner_rejects "$root/kimi-review.sh" --owner kimi routine "$test_root/prompt.md" "$test_root/.collab/bad-owner.md" "$test_root/packet/source.md"
 [[ ! -e "$test_root/.collab/self-claude.diagnostic.json" && ! -e "$test_root/.collab/self-codex.diagnostic.json" ]]
 PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
   "$root/claude-review.sh" --owner codex sonnet "$test_root/prompt.md" \
@@ -353,47 +396,82 @@ PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --pac
   "$test_root/prompt.md" "$test_root/.collab/gemini-owned.json" "$test_root/packet/source.md" >/dev/null
 jq -e '.reviewer_metadata.owner == "claude"' "$test_root/.collab/gemini-owned.json" >/dev/null
 
-set +e
-PATH="$test_root/bin:$PATH" \
-  "$root/kimi-review.sh" --packet-root "$test_root/shared" kimi-k2.6:cloud \
+# Kimi uses managed subscription OAuth, explicit tier mappings, and an isolated
+# no-tools CLI session. The mock checks its workspace, agent, skills, and env.
+kimi_repo="$test_root/kimi-repo"; mkdir -p "$kimi_repo/.collab"
+kimi_args="$test_root/kimi-args"; kimi_prompt="$test_root/kimi-prompt"; kimi_marker="$test_root/kimi-marker"
+kimi_review() {
+  local tier="$1" output="$2"; shift 2
+  PATH="$test_root/bin:$PATH" KIMI_MOCK_ARGS="$kimi_args" KIMI_MOCK_PROMPT="$kimi_prompt" KIMI_MOCK_MARKER="$kimi_marker" "$@" \
+    "$root/kimi-review.sh" --packet-root "$test_root" --owner codex "$tier" "$test_root/prompt.md" "$kimi_repo/.collab/$output" "$test_root/packet/source.md"
+}
+kimi_fails() {
+  local expected="$1" tier="$2" output="$3"; shift 3
+  set +e; kimi_review "$tier" "$output" "$@" >/dev/null 2>&1; local code=$?; set -e
+  [[ $code -eq $expected && -s "$kimi_repo/.collab/${output%.md}.diagnostic.json" && ! -e "$kimi_repo/.collab/$output" ]] \
+    || { print -u2 "kimi $output: expected exit $expected, got $code"; exit 1; }
+}
+kimi_review routine kimi-routine.md env KIMI_TEST_MODE=success >/dev/null
+grep -F -- '--model kimi-code/kimi-for-coding' "$kimi_args" >/dev/null
+grep -Fx 'model=kimi-code/kimi-for-coding effort=low' "$kimi_marker" >/dev/null
+grep -F 'Safe packet fixture.' "$kimi_prompt" >/dev/null
+for line in 'Owner: codex' 'Requested model: routine' 'Selected model: kimi-code/kimi-for-coding' 'Reasoning effort: low' \
+  'Resolved model(s): not reported by Kimi Code stream-json' 'CLI version: kimi 2.2.0' 'Tool events: 0' \
+  'Usage: not reported by Kimi Code stream-json' 'VERDICT: ACCEPT'; do
+  grep -Fx -- "$line" "$kimi_repo/.collab/kimi-routine.md" >/dev/null || { print -u2 "kimi-routine.md missing: $line"; exit 1; }
+done
+! grep -Fx 'draft' "$kimi_repo/.collab/kimi-routine.md" >/dev/null
+[[ -s "$kimi_repo/.collab/kimi-routine.md.sha256" ]]
+kimi_review hard kimi-hard.md env KIMI_TEST_MODE=success >/dev/null
+grep -F -- '--model kimi-code/k3' "$kimi_args" >/dev/null
+grep -Fx 'model=kimi-code/k3 effort=high' "$kimi_marker" >/dev/null
+kimi_fails 78 routine kimi-env-api.md env KIMI_TEST_MODE=success KIMI_API_KEY=test
+jq -e '.reason | contains("API credentials")' "$kimi_repo/.collab/kimi-env-api.diagnostic.json" >/dev/null
+kimi_fails 78 routine kimi-provider-api.md env KIMI_TEST_MODE=success KIMI_MOCK_AUTH=api_key
+kimi_fails 78 routine kimi-empty-oauth.md env KIMI_TEST_MODE=success KIMI_MOCK_AUTH=empty_oauth
+kimi_fails 78 routine kimi-signed-out.md env KIMI_TEST_MODE=success KIMI_MOCK_AUTH=signed_out
+kimi_fails 78 routine kimi-wrong-provider.md env KIMI_TEST_MODE=success KIMI_MOCK_AUTH=wrong_provider
+kimi_fails 78 pro kimi-badtier.md env KIMI_TEST_MODE=success
+kimi_fails 70 routine kimi-tool.md env KIMI_TEST_MODE=tool
+jq -e '.reason | contains("tool events")' "$kimi_repo/.collab/kimi-tool.diagnostic.json" >/dev/null
+kimi_fails 70 routine kimi-schema-tool.md env KIMI_TEST_MODE=schema-tool
+jq -e '.reason | contains("tool events")' "$kimi_repo/.collab/kimi-schema-tool.diagnostic.json" >/dev/null
+kimi_fails 70 routine kimi-incomplete.md env KIMI_TEST_MODE=incomplete
+kimi_fails 70 routine kimi-failure.md env KIMI_TEST_MODE=fail
+jq -e '.reasoning_effort == "low" and (.reason | contains("returned nonzero"))' "$kimi_repo/.collab/kimi-failure.diagnostic.json" >/dev/null
+jq -e '.model_invocation_began == true' "$kimi_repo/.collab/kimi-failure.diagnostic.json" >/dev/null
+jq -e '.model_invocation_began == false' "$kimi_repo/.collab/kimi-env-api.diagnostic.json" >/dev/null
+kimi_args_before="$(<"$kimi_args")"
+set +e; kimi_review routine kimi-failure.md env KIMI_TEST_MODE=success >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 65 && "$(<"$kimi_args")" == "$kimi_args_before" ]]
+kimi_fails 65 routine kimi-oversize.md env KIMI_TEST_MODE=success KIMI_MAX_PROMPT_BYTES=10
+kimi_fails 64 routine kimi-bad-timeout.md env KIMI_TEST_MODE=success KIMI_MAX_TIME_SECONDS=abc
+kimi_fails 70 routine kimi-timeout.md env KIMI_TEST_MODE=hang KIMI_MAX_TIME_SECONDS=1
+jq -e '.reason == "Kimi invocation timed out" and .owner == "codex"' "$kimi_repo/.collab/kimi-timeout.diagnostic.json" >/dev/null
+
+KIMI_TEST_MODE=success KIMI_MOCK_PROMPT="$kimi_prompt" PATH="$test_root/bin:$PATH" \
+  "$root/kimi-review.sh" --packet-root "$test_root/shared" --owner claude routine \
   "$test_root/shared/prompt.md" "$test_root/.collab/kimi-shared.md" \
-  "$test_root/shared/packet.md" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -ne 0 ]]
-[[ -s "$test_root/.collab/kimi-shared.diagnostic.json" ]]
-
-set +e
-OLLAMA_TEST_MODE=subscription PATH="$test_root/bin:$PATH" \
-  "$root/kimi-review.sh" kimi-k2.6:cloud "$test_root/prompt.md" \
-  "$test_root/.collab/kimi-subscription.md" "$test_root/packet/source.md" >/dev/null 2>&1
-code=$?
-set -e
-[[ $code -eq 78 ]]
-jq -e '.reason == "Ollama access denied: this Kimi model requires a subscription"' \
-  "$test_root/.collab/kimi-subscription.diagnostic.json" >/dev/null
-
-OLLAMA_TEST_MODE=success PATH="$test_root/bin:$PATH" \
-  "$root/kimi-review.sh" kimi-k2.6:cloud "$test_root/prompt.md" \
-  "$test_root/.collab/kimi-success.md" "$test_root/packet/source.md" >/dev/null
-[[ -s "$test_root/.collab/kimi-success.md" ]]
-[[ -s "$test_root/.collab/kimi-success.md.sha256" ]]
+  "$test_root/shared/packet.md" "$test_root/packet/source.md" >/dev/null
+grep -F 'Shared packet fixture.' "$kimi_prompt" >/dev/null
+grep -F 'Safe packet fixture.' "$kimi_prompt" >/dev/null
+[[ -s "$test_root/.collab/kimi-shared.md" && -s "$test_root/.collab/kimi-shared.md.sha256" ]]
 
 # Review budget: five rounds per topic across providers, then one Gemini
 # round, then refusal; one hard-tier round per topic; a daily cap per provider.
 today="$(date +%F)"; broot="$test_root/budget"; mkdir -p "$broot/.collab"; print 'Budget packet.' > "$broot/packet.md"
-claude_args="$test_root/claude-args"
+claude_args="$test_root/claude-args"; kimi_args="$test_root/kimi-budget-args"
 breview() {
   local wrapper="$1" tier="$2" output="$3"; shift 3
   PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
-    CODEX_TEST_MODE=success AGY_TEST_MODE=success CLAUDE_MOCK_ARGS="$claude_args" "$@" \
+    CODEX_TEST_MODE=success AGY_TEST_MODE=success CLAUDE_MOCK_ARGS="$claude_args" KIMI_MOCK_ARGS="$kimi_args" "$@" \
     "$root/$wrapper" --packet-root "$test_root" --owner codex "$tier" "$test_root/prompt.md" "$broot/.collab/$output" "$broot/packet.md"
 }
 brefused() {
   local pattern="$1" wrapper="$2" tier="$3" output="$4"; shift 4
-  : > "$claude_args"
+  : > "$claude_args"; : > "$kimi_args"
   set +e; breview "$wrapper" "$tier" "$output" "$@" >/dev/null 2>&1; local code=$?; set -e
-  [[ $code -eq 79 && ! -e "$broot/.collab/$output" && ! -s "$claude_args" ]] \
+  [[ $code -eq 79 && ! -e "$broot/.collab/$output" && ! -s "$claude_args" && ! -s "$kimi_args" ]] \
     || { print -u2 "budget $output: expected refusal 79, got $code"; exit 1; }
   jq -e --arg p "$pattern" '.reason | contains($p)' "$broot/.collab/${${output%.md}%.json}.diagnostic.json" >/dev/null \
     || { print -u2 "budget $output: reason lacks '$pattern'"; exit 1; }
@@ -425,9 +503,9 @@ breview claude-review.sh opus claude-$today-hardtopic-r01.md >/dev/null
 brefused 'hard-tier' claude-review.sh opus claude-$today-hardtopic-r02.md
 # A false length claim about a quoted hex value is noted in the header.
 digest=ca71fc6a71fca61d604705e0105298c4a7c52c8c2cdf22a9e25294cdddd483b1
-breview claude-review.sh sonnet claude-$today-hardtopic-r02.md env CLAUDE_MOCK_EXTRA="F1 [minor]: \`$digest\` is 63 hex characters." >/dev/null
+breview claude-review.sh sonnet claude-$today-hardtopic-r03.md env CLAUDE_MOCK_EXTRA="F1 [minor]: \`$digest\` is 63 hex characters." >/dev/null
 grep -Fx "Mechanical check: F1 states 63 hex characters; the quoted value measures 64 (ca71fc6a 71fca61d 604705e0 105298c4 a7c52c8c 2cdf22a9 e25294cd ddd483b1)" \
-  "$broot/.collab/claude-$today-hardtopic-r02.md" >/dev/null
+  "$broot/.collab/claude-$today-hardtopic-r03.md" >/dev/null
 # Old reviews count on their own date, even after a checkout resets mtimes.
 for i in {1..9}; do : > "$broot/.collab/claude-2020-01-0$i-old-r01.md"; done
 # Seven Claude reviews and one counted failure ran here today: the next is refused.
@@ -436,6 +514,9 @@ brefused 'reviews already ran in this repository today' claude-review.sh sonnet 
 
 # Fixes from review r01, in a fresh repository so the daily cap is not hit.
 broot="$test_root/budget2"; mkdir -p "$broot/.collab"; print 'Budget packet.' > "$broot/packet.md"
+cat > "$test_root/kimi-policy-override.json" <<'EOF'
+{"tiers":{"hard":{"model":"kimi-code/k3","reasoning_effort":"high"},"routine":{"model":"kimi-code/k3","reasoning_effort":"high"}}}
+EOF
 # Codex ran this topic's first round; Claude's first round still gets medium effort.
 PATH="$test_root/bin:$PATH" CODEX_TEST_MODE=success "$root/codex-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" \
   "$broot/.collab/codex-$today-mixed-r01.md" "$broot/packet.md" >/dev/null
@@ -444,7 +525,46 @@ grep -F -- '--effort medium' "$claude_args" >/dev/null
 # A hard-tier call that reached the model and failed still uses the hard round.
 set +e; breview claude-review.sh opus claude-$today-hardfail-r01.md env CLAUDE_MOCK_RESOLVED=claude-opus-5 >/dev/null 2>&1; set -e
 brefused 'hard-tier' claude-review.sh opus claude-$today-hardfail-r02.md
-# A Gemini run cut off at the output-token limit used quota, so it counts.
+# Kimi hard rounds use the same per-topic cap and block another provider's hard round.
+breview kimi-review.sh hard kimi-$today-kimihard-r01.md env KIMI_TEST_MODE=success >/dev/null
+brefused 'hard-tier' kimi-review.sh hard kimi-$today-kimihard-r02.md env KIMI_TEST_MODE=success
+brefused 'hard-tier' claude-review.sh opus claude-$today-kimihard-r02.md
+# A failed Kimi hard call counts conservatively; a routine alias/effort override cannot bypass the hard cap.
+set +e; breview kimi-review.sh hard kimi-$today-kimihardfail-r01.md env KIMI_TEST_MODE=fail >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 70 && -s "$broot/.collab/kimi-$today-kimihardfail-r01.diagnostic.json" ]]
+brefused 'hard-tier' kimi-review.sh hard kimi-$today-kimihardfail-r02.md env KIMI_TEST_MODE=success
+breview kimi-review.sh routine kimi-$today-policy-r01.md env KIMI_TEST_MODE=success KIMI_REVIEW_MODEL_POLICY="$test_root/kimi-policy-override.json" >/dev/null
+grep -Fx 'Reasoning effort: high' "$broot/.collab/kimi-$today-policy-r01.md" >/dev/null
+# A routine call whose policy override resolves to the hard model/effort still
+# consumes the hard round: the next routine call with the same override is refused.
+brefused 'hard-tier' kimi-review.sh routine kimi-$today-policy-r02.md env KIMI_TEST_MODE=success KIMI_REVIEW_MODEL_POLICY="$test_root/kimi-policy-override.json"
+# Interruption during the OAuth preflight is not a spent round.
+hang_marker="$test_root/kimi-provider-hang"; rm -f "$hang_marker"
+set +e
+PATH="$test_root/bin:$PATH" KIMI_MOCK_AUTH=hang-provider KIMI_PROVIDER_HANG_MARKER="$hang_marker" \
+  "$root/kimi-review.sh" --packet-root "$test_root" --owner codex routine "$test_root/prompt.md" \
+  "$kimi_repo/.collab/kimi-$today-interrupt-r01.md" "$test_root/packet/source.md" >/dev/null 2>&1 &
+kimi_pid=$!
+for i in {1..50}; do [[ -e "$hang_marker" ]] && break; sleep 0.1; done
+kill -TERM "$kimi_pid" 2>/dev/null
+wait "$kimi_pid"; code=$?
+set -e
+[[ $code -eq 78 && ! -e "$kimi_repo/.collab/kimi-$today-interrupt-r01.md" ]]
+jq -e '.reason == "Kimi invocation interrupted before model invocation began (SIGTERM)"' \
+  "$kimi_repo/.collab/kimi-$today-interrupt-r01.diagnostic.json" >/dev/null
+[[ "$(python3 "$root/review-budget.py" kimi routine "$kimi_repo/.collab/kimi-$today-interrupt-r02.md")" == "0 0" ]]
+# A Kimi failure after invocation began counts as spent even when the reason
+# has no SPENT keyword (codex r01 F1): the model_invocation_began flag decides.
+jq -n '{provider:"kimi",exit_code:70,reason:"Kimi assistant response extraction failed",requested_model:"routine",selected_model:"kimi-code/k3",reasoning_effort:"high",model_invocation_began:true}' \
+  > "$broot/.collab/kimi-$today-extract-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-extract-r02.md")" == "1 1" ]]
+jq -n '{provider:"kimi",exit_code:78,reason:"Kimi invocation interrupted before model invocation began (SIGTERM)",model_invocation_began:false}' \
+  > "$broot/.collab/kimi-$today-preflight-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-preflight-r02.md")" == "0 0" ]]
+# The flag is authoritative: a false flag never counts, whatever the reason says.
+jq -n '{provider:"kimi",exit_code:70,reason:"Kimi invocation returned nonzero after model invocation began (exit 42)",model_invocation_began:false}' \
+  > "$broot/.collab/kimi-$today-falseflag-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-falseflag-r02.md")" == "0 0" ]]
 jq -n '{provider:"gemini",exit_code:70,reason:"Gemini hit the output-token limit before finishing the review; split the packet or send a delta"}' \
   > "$broot/.collab/gemini-$today-cutoff-r01.diagnostic.json"
 [[ "$(python3 "$root/review-budget.py" gemini routine "$broot/.collab/gemini-$today-cutoff-r02.json")" == "1 1" ]]

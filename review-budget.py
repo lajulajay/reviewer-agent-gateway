@@ -6,10 +6,10 @@
 A topic is the output name without its provider prefix, date, `-rNN` suffix,
 and extension, so `claude-2026-10-07-h5-final-analysis-r22.md` and
 `gemini-2026-10-08-h5-final-analysis.json` are rounds of `h5-final-analysis`.
-Every provider's rounds count together, as do failed calls that reached the
-model (a validation failure, model mismatch, or timeout). After
-max_rounds_per_topic rounds only the escalation provider may run, for
-escalation_rounds more; then the open points go to the user.
+Every provider's rounds count together, including failed calls that reached or
+may have reached the model. Calls refused before model invocation are not
+counted. After max_rounds_per_topic rounds only the escalation provider may
+run, for escalation_rounds more; then the open points go to the user.
 
 On success prints the number of earlier rounds on the topic and how many of
 them this provider ran. On refusal
@@ -27,9 +27,19 @@ from pathlib import Path
 
 PROVIDERS = ("claude", "codex", "gemini", "kimi")
 NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
-# Failed calls in which the model ran and used quota. "invocation failed" is
-# not counted: it includes calls refused at a usage limit before any work.
+# Calls that fail after model invocation begins are counted conservatively.
+# Preflight failures (authentication, availability, budget refusal) are not.
+# Providers that record an explicit model_invocation_began flag (Kimi) are
+# counted on that flag alone; the reason regex covers the other providers.
 SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed|output-token limit")
+
+
+def spent_failure(d):
+    # Providers that record model_invocation_began (Kimi) are decided by the
+    # flag alone; a false flag with a model-sounding reason must not count.
+    if "model_invocation_began" in d:
+        return d.get("model_invocation_began") is True
+    return bool(SPENT.search(d.get("reason", "")))
 
 
 def parse(name):
@@ -39,7 +49,9 @@ def parse(name):
     return (m.group(1), m.group(3), m.group(2)) if m else None
 
 
-def hard(provider, requested, selected):
+def hard(provider, requested, selected, effort=""):
+    if provider == "kimi":
+        return requested == "hard" or selected.startswith("kimi-code/k3") or effort == "high"
     return provider in ("claude", "codex") and (requested in ("opus", "hard") or "opus" in selected)
 
 
@@ -47,7 +59,13 @@ def is_hard(path, provider):
     head = path.read_text(errors="replace")[:2000]
     m = re.search(r"(?m)^Requested model: (.+)$", head)
     sel = re.search(r"(?m)^Selected model: (.+)$", head)
-    return hard(provider, m.group(1).strip() if m else "", sel.group(1) if sel else "")
+    effort = re.search(r"(?m)^Reasoning effort: (.+)$", head)
+    return hard(
+        provider,
+        m.group(1).strip() if m else "",
+        sel.group(1).strip() if sel else "",
+        effort.group(1).strip() if effort else "",
+    )
 
 
 def rounds(collab):
@@ -63,9 +81,10 @@ def rounds(collab):
                 d = json.loads(f.read_text())
             except (json.JSONDecodeError, OSError):
                 continue
-            if d.get("exit_code") in (70, 74) and SPENT.search(d.get("reason", "")):
+            if d.get("exit_code") in (70, 74) and spent_failure(d):
                 yield parsed[0], parsed[1], f, day(f, parsed), hard(
-                    parsed[0], d.get("requested_model") or "", d.get("selected_model") or "")
+                    parsed[0], d.get("requested_model") or "", d.get("selected_model") or "",
+                    d.get("reasoning_effort") or "")
             continue
         parsed = parse(f.name)
         if parsed:
@@ -103,7 +122,7 @@ def main(argv):
     elif n >= cap and provider != esc:
         problems.append(f"topic '{topic}' has had {n} review rounds (cap {cap}); escalate to {esc}-review.sh, then to the user")
     hard_n = sum(1 for r in prior if r[4])
-    if tier == "hard" and provider in ("claude", "codex") and hard_n >= policy["max_hard_rounds_per_topic"]:
+    if tier == "hard" and provider in ("claude", "codex", "kimi") and hard_n >= policy["max_hard_rounds_per_topic"]:
         problems.append(f"topic '{topic}' already used {hard_n} hard-tier round(s) (cap {policy['max_hard_rounds_per_topic']}); use the routine tier")
     if len(today) >= policy["max_reviews_per_provider_per_day"]:
         problems.append(f"{len(today)} {provider} reviews already ran in this repository today (cap {policy['max_reviews_per_provider_per_day']})")

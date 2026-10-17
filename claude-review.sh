@@ -14,7 +14,7 @@ done
 [[ "$owner" != claude ]] || { print -u2 "Claude cannot review work it owns; use codex-review.sh"; exit 64; }
 requested_model="$1"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
-[[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" ]] || { print -u2 "invalid or existing output"; exit 65; }
+[[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-claude.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT INT TERM
 stdout="$tmp/stdout.json"; stderr="$tmp/stderr"; combined="$tmp/prompt.txt"; debug="$tmp/debug.log"; diagnostic="$outdir/${base%.md}.diagnostic.json"; start=$SECONDS
 : > "$stdout"; : > "$stderr"; : > "$debug"

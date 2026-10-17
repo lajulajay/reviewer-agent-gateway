@@ -5,21 +5,17 @@ prediction-market repositories and other projects. Consumer repositories keep
 small tracked entrypoints that delegate here. Roles, escalation, and review
 records are defined in [PROTOCOL.md](PROTOCOL.md).
 
-Kimi runs through Ollama, but the current signed-in account has no entitlement
-to either Kimi cloud model. `ollama list` may show `kimi-k2.6:cloud` even when
-`ollama run` is denied with a subscription-required 403, so list output is not
-an access check. Kimi is unavailable until an explicit access and budget
-change. `kimi-k3:cloud` remains a future option. The wrapper never uses
-Moonshot API credentials or endpoints.
+Kimi runs through the Kimi Code CLI's managed OAuth provider. The wrapper
+refuses API credentials and model/endpoint overrides, verifies that the selected
+alias is configured for managed OAuth with no API key, and does not use Ollama
+or direct Moonshot API configuration.
 
 Invocation contract:
 
 ```text
 reviewer.sh [--packet-root DIR] [--owner codex|claude] MODEL PROMPT OUTPUT PACKET...
+auto-review.sh [--packet-root DIR] --owner codex|claude <hard|routine> PROMPT AUTO_OUTPUT PACKET...
 ```
-
-For Kimi, use `OLLAMA_MAX_TIME_SECONDS` for the wrapper timeout; it defaults
-to 900 seconds. The legacy `KIMI_MAX_TIME_SECONDS` setting no longer applies.
 
 The target repository is derived from the output path. Inputs outside it are
 allowed only with explicit `--packet-root`; symlinks, secret/private paths,
@@ -33,14 +29,84 @@ non-overwritable `.diagnostic.json` beside the requested output whenever the
 output location is usable.
 
 `--owner` names the agent that owns the work under review. It is optional for
-compatibility but [PROTOCOL.md](PROTOCOL.md) requires it: the Claude wrapper
-refuses `--owner claude`, the Codex wrapper refuses `--owner codex`, and every
-wrapper records the owner in its artifact or diagnostic.
+compatibility on direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires
+it: the Claude wrapper refuses `--owner claude`, the Codex wrapper refuses
+`--owner codex`, and every wrapper records the owner in its artifact or
+diagnostic. Automatic selection requires `--owner` and excludes that reviewer.
 
-Active roles: Codex and Claude interchangeably own work, the non-owner is the
-primary reviewer, and Gemini is always the backup. Kimi is inactive while
-Moonshot membership access is pending; it may be reconsidered only after
-explicit reactivation.
+Active roles: Codex and Claude interchangeably own work; Kimi is reviewer-only.
+Kimi, Claude, and Codex are official reviewers when active in
+`reviewer-roster.json`, and Gemini is always the fallback reviewer, never an
+owner. Remove a reviewer from `active_reviewers` when its subscription lapses
+and restore it when renewed; `tie_break_order` must continue to list all three
+subscription reviewers.
+
+`auto-review.sh` chooses among active subscription reviewers other than the
+owner and not already at the repository's per-provider daily cap. For a new
+topic it selects the reviewer with the fewest spent gateway review rounds today,
+using roster order to break ties. A follow-up stays with the topic's latest
+eligible reviewer when round numbering establishes one unambiguous reviewer; if
+the latest reviewer is inactive, capped, or ambiguous, selection falls back to
+daily balancing. The `auto-YYYY-MM-DD-<topic>[-rNN].md` argument is a naming
+template: the successful artifact uses the selected provider's prefix. Both the
+template and candidate outputs reject an existing artifact or diagnostic, so a
+failed request cannot be retried under the same name.
+
+This is deterministic local load balancing, not a claim to know each provider's
+remaining quota. Claude and Kimi expose usage interactively and Codex exposes
+status in an active session, so there is no cheap, comparable cross-provider
+quota preflight. Review history is already available locally and includes failed
+calls that reached or may have reached the model. Gemini is deliberately
+excluded from this rotation. Automatic failover tries the next candidate only
+after preflight exit 69 or 78; it never repeats a call after model invocation,
+timeout, validation failure, or budget refusal. If every candidate fails
+preflight, use Gemini.
+
+## Kimi reviews through Kimi Code
+
+`kimi-review.sh` accepts the `routine` and `hard` tiers. The explicit mappings
+in `kimi-model-policy.json` are currently:
+
+| Tier | Managed model alias | Requested reasoning effort |
+| :--- | :--- | :--- |
+| `routine` | `kimi-code/kimi-for-coding` | `low` |
+| `hard` | `kimi-code/k3` | `high` |
+
+Unlike the dated Claude and Gemini catalogs, these purpose-specific managed
+aliases do not use a second-older-release rule. Update the policy when the
+subscription's available aliases or desired effort change.
+`KIMI_REVIEW_MODEL_POLICY` may point to another policy file for an isolated
+test; selected K3-family aliases or `high` effort are still classified as
+hard-tier use for budget accounting. Kimi Code does not report the serving
+model, resolved effort, or token usage in its review stream, so the artifact
+records the selected alias and requested effort and marks serving model and
+usage as unreported.
+
+Before every call the wrapper checks sanitized `kimi provider list --json`
+output: the selected alias must belong to `managed:kimi-code`, use provider type
+`kimi`, have nonempty OAuth metadata, and have no API-key configuration. API
+credentials and model or endpoint environment overrides are refused. This
+preflight establishes the managed OAuth configuration, not the account's live
+remaining quota or an unexpired membership; sign in through Kimi Code's normal
+subscription flow and check `/usage` interactively for current quota.
+
+The review runs from an empty workspace with an agent whose `tools: []` and
+`subagents: []` disable tool and delegation access, an empty replacement skills
+directory, and cron, background steering, and automatic updates disabled. The
+Kimi CLI is documented to enforce that agent allowlist before tool execution;
+the wrapper does not independently verify session contents, and a reviewer that
+never attempts a tool produces no observable denial. The wrapper therefore
+fails closed if the JSONL stream contains an Assistant `tool_calls` event, Tool
+message, or defensive tool-call field — a real emission, observed in positive
+allow-tool probes, is rejected. The prompt and
+packets are inlined, capped by `KIMI_MAX_PROMPT_BYTES` (default 800000 bytes),
+and bounded by `KIMI_MAX_TIME_SECONDS` (default 900 seconds).
+
+Kimi Code is documented to persist session records under
+`$KIMI_CODE_HOME/sessions/` (normally `~/.kimi-code/sessions/`); those records
+may contain the inlined prompt and packet. The wrapper does not read or verify
+session contents. Keep secrets and private data out of packets; the wrapper's
+path checks remain mandatory.
 
 ## Claude review tier policy
 
@@ -190,29 +256,33 @@ Packets must still exclude secrets; the private-path rules above apply.
 
 ## Review budget and usage records
 
-`review-budget.py` runs in every wrapper (Kimi is inactive and excluded)
-before the model call and applies `review-budget.json`; the rules are in
+`review-budget.py` runs in every wrapper before the model call and applies
+`review-budget.json`; the rules are in
 [PROTOCOL.md](PROTOCOL.md#review-budget). It counts the topic's artifacts in
-`.collab/`, plus diagnostics for failed calls that reached the model, and
-counts the daily cap by the date in the output name. Changing the limits is a
-committed change to `review-budget.json`; the wrappers refuse to run with it
-uncommitted.
+`.collab/`, plus diagnostics for failed calls that reached or may have reached
+the model, and counts the daily cap by the date in the output name. Kimi calls
+are classified as hard-tier when the requested tier is `hard`, the selected
+alias is in the K3 family, or the artifact/diagnostic records `high` effort.
+Changing the limits is a committed change to `review-budget.json`; the wrappers
+refuse to run with it uncommitted.
 
 Artifacts record what each call used: the Claude header has `Effort:` and
 `Usage:` (tokens, `total_cost_usd` as Claude Code reports it, duration, and
-turns), the Codex header has `Usage:` from `turn.completed`, and Gemini
-artifacts keep `agy`'s `usage` field. `reviewer-claims.py` adds a
-`Mechanical check:` header line (Gemini: `reviewer_metadata.mechanical_checks`)
-when a review says a quoted hex value has a length it does not have, or cites
-a `file://` path (reviewers have no file access, so the link does not verify
-any quoted code; the owner checks the quote against the packet). `reviewer-validate.py` refuses a finding labeled with a
-severity other than `blocker`, `major` or `minor`, which would otherwise go
-untracked.
+turns), the Codex header has `Usage:` from `turn.completed`, Gemini artifacts
+keep `agy`'s `usage` field, and Kimi explicitly marks usage and serving model
+as unreported. `reviewer-claims.py` adds a `Mechanical check:` header line
+(Gemini: `reviewer_metadata.mechanical_checks`) when a review says a quoted hex
+value has a length it does not have, or cites a `file://` path (reviewers have
+no file access, so the link does not verify any quoted code; the owner checks
+the quote against the packet). `reviewer-validate.py` refuses a finding labeled
+with a severity other than `blocker`, `major` or `minor`, which would otherwise
+go untracked.
 
 Run provider-free regression checks with:
 
 ```bash
 tests/wrapper-failure-smoke.zsh
+python3 tests/test_reviewer_select.py
 python3 tests/test_docs_check.py
 ```
 

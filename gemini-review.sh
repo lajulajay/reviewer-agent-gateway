@@ -12,7 +12,7 @@ done
 [[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <model> <prompt-file> <new-output.json> <packet-file>..."; exit 64; }
 requested_model="$1"; model="$requested_model"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
-[[ "$outdir" == "$root/.collab" && "$base" == *.json && ! -e "$output" ]] || { print -u2 "invalid or existing output"; exit 65; }
+[[ "$outdir" == "$root/.collab" && "$base" == *.json && ! -e "$output" && ! -e "$outdir/${base%.json}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-gemini.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT INT TERM
 response="$tmp/stream.jsonl"; stderr="$tmp/stderr"; hook_log="$tmp/hook.log"; diagnostic="$outdir/${base%.json}.diagnostic.json"; start=$SECONDS
 : > "$response"; : > "$stderr"; : > "$hook_log"

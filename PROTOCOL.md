@@ -10,11 +10,11 @@ rules. If repository wording differs from this file, this file wins.
 | Role | Who | Does |
 | :--- | :--- | :--- |
 | Owner | Codex **or** Claude, assigned by the user per workstream | Investigates, implements, tests, and commits/pushes/deploys within the user's escalation boundary |
-| Primary reviewer | Whichever of Codex/Claude is not the owner | Read-only adversarial review of substantive work |
-| Backup reviewer | Gemini, always | Read-only review when the primary reviewer is unavailable or a decision-material disagreement remains unresolved |
-| Inactive | Kimi | Not invoked until the user explicitly reactivates it |
+| Official reviewers | Active Kimi, Claude, and Codex reviewers other than the owner | Read-only adversarial review of substantive work |
+| Fallback reviewer | Gemini, always | Read-only review when no eligible subscription reviewer is available or a decision-material disagreement remains unresolved |
 
-Codex and Claude are interchangeable owners; neither is the default.
+Codex and Claude are interchangeable owners; neither is the default. Kimi and
+Gemini are reviewer-only and never own work.
 
 - **Recording the owner.** Each workstream file in the repository's
   `workstreams/` starts with an `Owner: Codex` or `Owner: Claude` line
@@ -23,19 +23,26 @@ Codex and Claude are interchangeable owners; neither is the default.
   e.g. `Owner: Claude (from Codex, 2026-10-03, Codex limit reached)`; earlier
   entries are never rewritten.
 - **No self-review.** A change is reviewed only by an agent that did not
-  author it. Pass `--owner codex|claude` on every reviewer call: the Claude
-  wrapper refuses `--owner claude`, the Codex wrapper refuses `--owner codex`,
-  and every wrapper records the owner in its artifact.
+  author it. Pass `--owner codex|claude` on every reviewer call: automatic
+  selection excludes the owner, the Claude wrapper refuses `--owner claude`,
+  the Codex wrapper refuses `--owner codex`, and every wrapper records the
+  owner in its artifact.
+- **Subscription roster.** `reviewer-roster.json` lists the currently active
+  Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
+  or lapses; automatic selection never chooses an inactive reviewer. Gemini is
+  deliberately absent because it is fallback-only.
 - **Ownership changes mid-workstream.** After a handoff, the new owner's
-  changes go to the other agent as usual. A packet that mixes both agents'
-  unreviewed work has no independent primary reviewer, so split it by author
-  or send it to Gemini.
-- **Escalation.** Use the primary reviewer for substantive work. Use Gemini
-  when the primary reviewer is unavailable (usage limit, outage, failed
-  invocation after diagnosis). Do not use reviewers for routine agreement,
-  style, or model voting.
+  changes go to another eligible reviewer as usual. For a packet that mixes
+  both owners' unreviewed work, use an active reviewer that authored none of
+  it (Kimi can review a Claude/Codex mixture), split it by author, or use
+  Gemini when no independent subscription reviewer is eligible.
+- **Escalation.** Use automatic subscription-reviewer selection for
+  substantive work unless a particular reviewer is required. Use Gemini when
+  all eligible subscription reviewers are unavailable (usage limit, outage,
+  or failed invocation after diagnosis). Do not use reviewers for routine
+  agreement, style, or model voting.
 - **Disagreement escalation (mandatory order).** When the owner and the
-  primary reviewer still disagree on a decision-material point after a
+  subscription reviewer still disagree on a decision-material point after a
   substantive round, the owner must obtain a Gemini review before bringing
   the disagreement to the user, including policy disagreements and
   disagreements about decisions reserved to the user. Empirical disputes
@@ -56,12 +63,26 @@ which delegate to this gateway:
 ```bash
 reviewers/claude-review.sh --owner codex  <sonnet|opus>    <prompt> .collab/claude-YYYY-MM-DD-topic.md <packet>...
 reviewers/codex-review.sh  --owner claude <routine|hard>   <prompt> .collab/codex-YYYY-MM-DD-topic.md  <packet>...
+reviewers/kimi-review.sh   --owner <codex|claude> <hard|routine> <prompt> .collab/kimi-YYYY-MM-DD-topic.md <packet>...
+reviewers/auto-review.sh   --owner <codex|claude> <hard|routine> <prompt> .collab/auto-YYYY-MM-DD-topic.md <packet>...
 reviewers/gemini-review.sh --owner <codex|claude> <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
 ```
 
 Add `--packet-root <dir>` to use a shared prompt or packet from outside the
 repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
 before the model or tier.
+
+For automatic selection, the `auto-` output name is a template; the artifact
+uses the chosen provider's prefix. New topics go to the active, non-owner
+reviewer with the fewest spent review rounds in that repository today and room
+under that provider's daily cap, with roster order breaking ties. Follow-ups
+stay with the topic's latest eligible reviewer when round records establish one
+unambiguous reviewer; otherwise selection falls back to daily balancing. An
+existing artifact or diagnostic is never retried under the same name. This
+local-history rule balances known gateway usage without pretending to measure
+incomparable provider quotas. The dispatcher fails over only after preflight
+exit 69 or 78, never after a model call, timeout, validation failure, or budget
+refusal; if all candidates fail preflight, use Gemini.
 
 Choose the smallest sufficient tier and record the requested tier, selected
 and resolved model(s), and a one-sentence rationale. The higher tier
@@ -80,15 +101,16 @@ Every review call spends the user's plan usage, so the wrappers enforce
 
 - **Five rounds per topic, then Gemini, then the user.** The topic is the
   output name without provider, date, and `-rNN`; rounds from every provider
-  count together, including failed calls that reached the model. After five,
-  only `gemini-review.sh` may run, at most twice: an assessment and, if the
-  owner fixes what it finds, a check of those fixes. After that the owner
-  brings the open points to the user in one packet, as in the disagreement
-  escalation above: the competing claims, the evidence, Gemini's assessment,
-  and the exact decision needed. No further review runs unless the user approves an
-  override.
-- **One hard-tier round per topic** (`opus` or Codex `hard`); use it where it
-  matters most.
+  count together, including failed calls that reached or may have reached the
+  model. After five, only `gemini-review.sh` may run, at most twice: an
+  assessment and, if the owner fixes what it finds, a check of those fixes.
+  After that the owner brings the open points to the user in one packet, as in
+  the disagreement escalation above: the competing claims, the evidence,
+  Gemini's assessment, and the exact decision needed. No further review runs
+  unless the user approves an override.
+- **One hard-tier round per topic** (Claude `opus`, Codex `hard`, or any Kimi
+  call classified as hard by requested tier, K3-family alias, or `high`
+  effort); use it where it matters most.
 - **Eight reviews per provider per repository per day.**
 - **Claude follow-up rounds run at low effort**; the first round runs at
   medium. A follow-up packet lists the open IDs and the owner's response to
@@ -97,7 +119,8 @@ Every review call spends the user's plan usage, so the wrappers enforce
   records the reason in the artifact, and `docs-check.py record` fails until
   a user Decisions entry approves a "budget override" for that round (`rNN`).
 - **Output names** must be `<provider>-YYYY-MM-DD-<topic>[-rNN].md|json`;
-  the daily cap reads the date from the name.
+  the daily cap reads the date from the name. Automatic selection also accepts
+  an `auto-` template but writes the actual artifact with the provider prefix.
 
 Before requesting another round, the owner checks each finding against the
 evidence. A finding that a script or test disproves is dispositioned
@@ -111,8 +134,9 @@ nothing; the owner checks any quoted code against the packet before acting.
 
 - Reviewers are read-only. They receive only explicit, sanitized packet
   files and may not edit the repository, mutate production or external
-  services, trigger agent runs, place orders, or deploy. The wrappers enforce
-  this: no reviewer has working tools.
+  services, trigger agent runs, place orders, or deploy. The wrappers launch
+  reviewers with tool and subagent access disabled and fail closed if a tool
+  event appears in the provider stream.
 - Give the smallest sufficient packet: exact files or line ranges, the diff
   or commit range, relevant evidence and invariants, the competing claims,
   the exact decision, prohibited actions, and named questions. Do not ask for

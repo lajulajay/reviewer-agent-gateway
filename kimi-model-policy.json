@@ -1,0 +1,6 @@
+{
+  "tiers": {
+    "hard": {"model": "kimi-code/k3", "reasoning_effort": "high"},
+    "routine": {"model": "kimi-code/kimi-for-coding", "reasoning_effort": "low"}
+  }
+}
