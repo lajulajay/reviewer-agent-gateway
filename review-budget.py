@@ -33,6 +33,8 @@ NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$
 
 
 def spent_failure(d):
+    if d.get("exit_code") not in (70, 74):
+        return False
     # A false flag with a model-sounding reason must not count.
     if "model_invocation_began" in d:
         return d.get("model_invocation_began") is True

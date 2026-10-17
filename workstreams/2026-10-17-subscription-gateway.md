@@ -26,6 +26,7 @@ service is changed.
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Claude | opus | `.collab/claude-2026-10-17-subscription-gateway-r01.md` | ACCEPT WITH CONDITIONS |
+| r02 | Claude | sonnet | `.collab/claude-2026-10-17-subscription-gateway-r02.diagnostic.json` | invalid severity; no accepted artifact |
 
 ## Findings and conditions
 
@@ -54,3 +55,7 @@ service is changed.
 - 2026-10-17: Claude r01 found budget accounting, author exclusion, and
   documentation issues. Codex fixed the code and tests and is preparing a
   routine follow-up review.
+- 2026-10-17: Claude r02 reached the model but the gateway rejected its
+  unsupported `[resolved]` severity labels. Its diagnostic raised a question
+  about preflight failures; the budget code now guards exit codes explicitly,
+  and provider-free tests cover exit 69 and 78 as unspent.

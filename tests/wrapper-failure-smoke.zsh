@@ -571,6 +571,12 @@ jq -n '{provider:"claude",exit_code:70,reason:"Claude invocation failed",request
 jq -n '{provider:"codex",exit_code:70,reason:"Codex invocation failed (exit 1)",requested_model:"routine"}' \
   > "$broot/.collab/codex-$today-codexfail-r01.diagnostic.json"
 [[ "$(python3 "$root/review-budget.py" codex routine "$broot/.collab/codex-$today-codexfail-r02.md")" == "1 1" ]]
+jq -n '{provider:"claude",exit_code:78,reason:"Claude model selection failed",requested_model:"sonnet"}' \
+  > "$broot/.collab/claude-$today-claudepreflight-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" claude routine "$broot/.collab/claude-$today-claudepreflight-r02.md")" == "0 0" ]]
+jq -n '{provider:"codex",exit_code:69,reason:"codex CLI not found",requested_model:"routine"}' \
+  > "$broot/.collab/codex-$today-codexpreflight-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" codex routine "$broot/.collab/codex-$today-codexpreflight-r02.md")" == "0 0" ]]
 jq -n '{provider:"gemini",exit_code:70,reason:"Gemini hit the output-token limit before finishing the review; split the packet or send a delta"}' \
   > "$broot/.collab/gemini-$today-cutoff-r01.diagnostic.json"
 [[ "$(python3 "$root/review-budget.py" gemini routine "$broot/.collab/gemini-$today-cutoff-r02.json")" == "1 1" ]]
