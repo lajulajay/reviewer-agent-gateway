@@ -27,6 +27,7 @@ service is changed.
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Claude | opus | `.collab/claude-2026-10-17-subscription-gateway-r01.md` | ACCEPT WITH CONDITIONS |
 | r02 | Claude | sonnet | `.collab/claude-2026-10-17-subscription-gateway-r02.diagnostic.json` | invalid severity; no accepted artifact |
+| r03 | Claude | sonnet | `.collab/claude-2026-10-17-subscription-gateway-r03.md` | ACCEPT |
 
 ## Findings and conditions
 
@@ -35,17 +36,18 @@ service is changed.
 | F1 | major | fixed: explicit additional authors excluded by auto selection | pending r02 |
 | F2 | major | rejected: Claude/Codex exits 69 and 78 occur before their model calls | pending r02 |
 | F3 | major | narrowed claim to documented CLI controls; live probe unavailable at Kimi usage limit | pending r02 |
-| F4 | minor | fixed: all non-Kimi exit 70/74 failures now count; protocol wording narrowed | pending r02 |
+| F4 | minor | fixed: all non-Kimi exit 70/74 failures now count; preflight exits remain unspent | verified r03 |
 | F5 | minor | fixed: auto template date must be today's local date | pending r02 |
 | F6 | minor | documented: budget override uses a fresh rNN name | pending r02 |
 | F7 | minor | fixed: uncommitted roster environment override removed | pending r02 |
 | F8 | minor | mitigated: prompt cap lowered to 100000 bytes; process-list exposure documented | pending r02 |
 | F9 | minor | documented limitation: serving model is not reported | pending r02 |
 | C1 | condition | fixed with additional author exclusions | pending r02 |
-| C2 | condition | wrapper exit-code locations checked | pending r02 |
+| C2 | condition | wrapper exit-code locations checked | verified r03 |
 | C3 | condition | official Kimi docs checked; live negative probe unavailable at usage limit | pending r02 |
-| C4 | condition | fixed with today-only template and test | pending r02 |
+| C4 | condition | fixed with today-only template and test | pending live review |
 | C5 | condition | protocol and README corrected | pending r02 |
+| R03-F1 | minor | fixed: comment explains defensive duplicate exit-code guard | closed |
 
 ## Log
 
@@ -59,3 +61,7 @@ service is changed.
   unsupported `[resolved]` severity labels. Its diagnostic raised a question
   about preflight failures; the budget code now guards exit codes explicitly,
   and provider-free tests cover exit 69 and 78 as unspent.
+- 2026-10-17: Claude r03 ACCEPT confirmed the preflight guard and tests. Its
+  sole minor documentation suggestion was fixed. Kimi's exhausted usage
+  prevents the live tool-denial probe requested in r01 C3; documented CLI
+  allowlist enforcement and provider-free tests support the implementation.
