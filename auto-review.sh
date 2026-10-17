@@ -2,15 +2,16 @@
 set -euo pipefail
 umask 077
 
-packet_root=""; owner=""
+packet_root=""; owner=""; authors=()
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
     --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
+    --author) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude || "$2" == kimi ) ]] || { print -u2 -- "--author must be codex, claude, or kimi"; exit 64; }; authors+=("$2"); shift 2 ;;
     *) print -u2 "unknown option: $1"; exit 64 ;;
   esac
 done
-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <hard|routine> <prompt-file> <auto-output.md> <packet-file>..."; exit 64; }
+[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> <prompt-file> <auto-output.md> <packet-file>..."; exit 64; }
 tier="$1"; prompt="$2"; output="$3"; shift 3
 [[ "$tier" == hard || "$tier" == routine ]] || { print -u2 "automatic review tier must be hard or routine"; exit 64; }
 [[ -n "$owner" ]] || { print -u2 "--owner is required for automatic reviewer selection"; exit 64; }
@@ -28,9 +29,8 @@ if git -C "$gateway" rev-parse --git-dir >/dev/null 2>&1; then
   wrapper_dirty="$(git -C "$gateway" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || { print -u2 "cannot read gateway status"; exit 78; }
   [[ -z "$wrapper_dirty" ]] || { print -u2 "gateway wrapper files have uncommitted changes"; exit 78; }
 fi
-roster="${REVIEWER_ROSTER:-$gateway/reviewer-roster.json}"
 set +e
-selection="$(python3 "$gateway/reviewer-select.py" "$roster" "$owner" "$output" 2>&1)"
+selection="$(python3 "$gateway/reviewer-select.py" "$gateway/reviewer-roster.json" "$owner" "$output" "${authors[@]}" 2>&1)"
 code=$?
 set -e
 [[ $code -eq 0 ]] || { print -u2 "$selection"; exit "$code"; }

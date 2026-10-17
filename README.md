@@ -14,7 +14,7 @@ Invocation contract:
 
 ```text
 reviewer.sh [--packet-root DIR] [--owner codex|claude] MODEL PROMPT OUTPUT PACKET...
-auto-review.sh [--packet-root DIR] --owner codex|claude <hard|routine> PROMPT AUTO_OUTPUT PACKET...
+auto-review.sh [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> PROMPT AUTO_OUTPUT PACKET...
 ```
 
 The target repository is derived from the output path. Inputs outside it are
@@ -33,6 +33,9 @@ compatibility on direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires
 it: the Claude wrapper refuses `--owner claude`, the Codex wrapper refuses
 `--owner codex`, and every wrapper records the owner in its artifact or
 diagnostic. Automatic selection requires `--owner` and excludes that reviewer.
+For a packet with additional authors, repeat `--author` for each of them;
+automatic selection excludes every named author. Do not use automatic selection
+for mixed-authorship work unless all authors are named.
 
 Active roles: Codex and Claude interchangeably own work; Kimi is reviewer-only.
 Kimi, Claude, and Codex are official reviewers when active in
@@ -42,7 +45,8 @@ and restore it when renewed; `tie_break_order` must continue to list all three
 subscription reviewers.
 
 `auto-review.sh` chooses among active subscription reviewers other than the
-owner and not already at the repository's per-provider daily cap. For a new
+owner and additional authors, and not already at the repository's per-provider
+daily cap. For a new
 topic it selects the reviewer with the fewest spent gateway review rounds today,
 using roster order to break ties. A follow-up stays with the topic's latest
 eligible reviewer when round numbering establishes one unambiguous reviewer; if
@@ -50,7 +54,9 @@ the latest reviewer is inactive, capped, or ambiguous, selection falls back to
 daily balancing. The `auto-YYYY-MM-DD-<topic>[-rNN].md` argument is a naming
 template: the successful artifact uses the selected provider's prefix. Both the
 template and candidate outputs reject an existing artifact or diagnostic, so a
-failed request cannot be retried under the same name.
+failed request cannot be retried under the same name. The template date must
+be today's local date. A user-approved budget override after a refusal uses a
+new `rNN` name; the workstream Decisions entry must approve that new round.
 
 This is deterministic local load balancing, not a claim to know each provider's
 remaining quota. Claude and Kimi expose usage interactively and Codex exposes
@@ -99,8 +105,10 @@ never attempts a tool produces no observable denial. The wrapper therefore
 fails closed if the JSONL stream contains an Assistant `tool_calls` event, Tool
 message, or defensive tool-call field — a real emission, observed in positive
 allow-tool probes, is rejected. The prompt and
-packets are inlined, capped by `KIMI_MAX_PROMPT_BYTES` (default 800000 bytes),
+packets are inlined, capped by `KIMI_MAX_PROMPT_BYTES` (default 100000 bytes),
 and bounded by `KIMI_MAX_TIME_SECONDS` (default 900 seconds).
+The inlined packet is passed as a CLI argument and can appear in local process
+listings while the review runs.
 
 Kimi Code is documented to persist session records under
 `$KIMI_CODE_HOME/sessions/` (normally `~/.kimi-code/sessions/`); those records

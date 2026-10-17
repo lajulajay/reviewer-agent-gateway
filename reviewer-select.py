@@ -40,9 +40,9 @@ def _topic(output):
     if not output.name.startswith("auto-"):
         raise ValueError("automatic output name must start with auto-")
     parsed = budget.parse("kimi-" + output.name[len("auto-") :])
-    if not parsed:
+    if not parsed or not parsed[2]:
         raise ValueError("output name must be auto-YYYY-MM-DD-<topic>[-rNN].md")
-    return parsed[1]
+    return parsed[1], date.fromisoformat(parsed[2])
 
 
 def _round_number(path):
@@ -75,20 +75,25 @@ def _latest_eligible(topic_rounds, available):
     return provider if provider in available else None
 
 
-def order(policy_path, owner, output, today=None):
+def order(policy_path, owner, output, today=None, authors=()):
     """Return provider names in invocation order for an auto-* output path."""
     if owner not in OWNERS:
         raise ValueError("owner must be codex or claude")
+    if any(author not in SUBSCRIPTION_REVIEWERS for author in authors):
+        raise ValueError("authors may contain only claude, codex, and kimi")
     output = Path(output)
     active, tie_order = load_roster(Path(policy_path))
-    eligible = [provider for provider in tie_order if provider in active and provider != owner]
+    excluded = {owner, *authors}
+    eligible = [provider for provider in tie_order if provider in active and provider not in excluded]
     if not eligible:
         raise ValueError("no eligible active subscription reviewer; use gemini-review.sh")
     if not output.parent.is_dir():
         raise ValueError(f"output directory does not exist: {output.parent}")
-    topic = _topic(output)
+    topic, output_day = _topic(output)
     history = list(budget.rounds(output.parent))
     today = today or date.today()
+    if output_day != today:
+        raise ValueError(f"automatic output date must be today ({today.isoformat()})")
     counts = {
         provider: sum(1 for round_ in history if round_[0] == provider and round_[3] == today)
         for provider in eligible
@@ -107,11 +112,11 @@ def order(policy_path, owner, output, today=None):
 
 
 def main(argv):
-    if len(argv) != 4:
-        print("usage: reviewer-select.py ROSTER_JSON <codex|claude> AUTO_OUTPUT_PATH", file=sys.stderr)
+    if len(argv) < 4:
+        print("usage: reviewer-select.py ROSTER_JSON <codex|claude> AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...]", file=sys.stderr)
         return 64
     try:
-        for provider in order(Path(argv[1]), argv[2], Path(argv[3])):
+        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=argv[4:]):
             print(provider)
         return 0
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

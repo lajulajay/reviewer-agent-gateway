@@ -34,8 +34,8 @@ class ReviewerSelectTest(unittest.TestCase):
     def output(self, name="auto-2026-10-16-new.md"):
         return self.collab / name
 
-    def select(self, owner="codex", name="auto-2026-10-16-new.md"):
-        return selector.order(self.roster, owner, self.output(name), today=TODAY)
+    def select(self, owner="codex", name="auto-2026-10-16-new.md", authors=()):
+        return selector.order(self.roster, owner, self.output(name), today=TODAY, authors=authors)
 
     def artifact(self, name):
         (self.collab / name).write_text("")
@@ -57,6 +57,17 @@ class ReviewerSelectTest(unittest.TestCase):
         self.write_roster(order=("kimi", "claude", "gemini"))
         with self.assertRaisesRegex(ValueError, "must contain claude, codex, and kimi"):
             self.select()
+
+    def test_additional_authors_are_excluded(self):
+        self.assertEqual(self.select(authors=("kimi",)), ["claude"])
+        with self.assertRaisesRegex(ValueError, "no eligible"):
+            self.select(authors=("kimi", "claude"))
+        with self.assertRaisesRegex(ValueError, "authors may contain"):
+            self.select(authors=("gemini",))
+
+    def test_template_date_must_be_today(self):
+        with self.assertRaisesRegex(ValueError, "date must be today"):
+            self.select(name="auto-2026-10-15-new.md")
 
     def test_inactive_subscriptions_and_empty_eligible_set(self):
         self.write_roster(active=("claude", "codex"))
@@ -201,6 +212,7 @@ class AutoReviewTest(unittest.TestCase):
         (self.repo / "prompt.md").write_text("Review prompt.\n")
         (self.repo / "packet.md").write_text("Safe packet.\n")
         self.log = self.base / "calls.log"
+        self.day = date.today().isoformat()
         self.log.write_text("")
         self.git("init", "-q")
         self.git("add", "-A")
@@ -212,21 +224,23 @@ class AutoReviewTest(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", str(self.gateway), *args], check=True, capture_output=True)
 
-    def run_auto(self, *extra_env, tier="routine", owner="codex", name="auto-2026-10-16-topic.md", roster=None):
+    def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=()):
         env = os.environ.copy()
         env["AUTO_MOCK_LOG"] = str(self.log)
-        for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE", "REVIEWER_ROSTER"):
+        for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE"):
             env.pop(key, None)
         for assignment in extra_env:
             key, value = assignment.split("=", 1)
             env[key] = value
         if roster is not None:
-            path = self.base / "custom-roster.json"
-            path.write_text(json.dumps(roster))
-            env["REVIEWER_ROSTER"] = str(path)
+            (self.gateway / "reviewer-roster.json").write_text(json.dumps(roster))
+            self.git("add", "reviewer-roster.json")
+            self.git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "test roster")
+        name = name or f"auto-{self.day}-topic.md"
         output = self.collab / name
         result = subprocess.run(
-            [str(self.gateway / "auto-review.sh"), "--owner", owner, tier,
+            [str(self.gateway / "auto-review.sh"), "--owner", owner,
+             *(arg for author in authors for arg in ("--author", author)), tier,
              str(self.repo / "prompt.md"), str(output), str(self.repo / "packet.md")],
             capture_output=True,
             text=True,
@@ -240,16 +254,21 @@ class AutoReviewTest(unittest.TestCase):
     def test_auto_uses_first_eligible_reviewer_and_provider_artifact(self):
         result = self.run_auto()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), ["kimi|routine|kimi-2026-10-16-topic.md"])
-        self.assertTrue((self.collab / "kimi-2026-10-16-topic.md").is_file())
-        self.assertFalse((self.collab / "auto-2026-10-16-topic.md").exists())
+        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-topic.md"])
+        self.assertTrue((self.collab / f"kimi-{self.day}-topic.md").is_file())
+        self.assertFalse((self.collab / f"auto-{self.day}-topic.md").exists())
+
+    def test_auto_excludes_kimi_coauthor(self):
+        result = self.run_auto(authors=("kimi",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
 
     def test_preflight_failure_fails_over_and_maps_claude_hard_tier(self):
         result = self.run_auto("AUTO_MOCK_KIMI_CODE=69", tier="hard")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [
-            "kimi|hard|kimi-2026-10-16-topic.md",
-            "claude|opus|claude-2026-10-16-topic.md",
+            f"kimi|hard|kimi-{self.day}-topic.md",
+            f"claude|opus|claude-{self.day}-topic.md",
         ])
         self.assertIn("trying the next eligible reviewer", result.stderr)
 
@@ -257,33 +276,34 @@ class AutoReviewTest(unittest.TestCase):
         roster = {"active_reviewers": ["claude"], "tie_break_order": ["kimi", "claude", "codex"]}
         result = self.run_auto(roster=roster)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.calls(), ["claude|sonnet|claude-2026-10-16-topic.md"])
+        self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
 
     def test_model_failure_and_budget_refusal_are_not_retried(self):
         for code in (70, 79):
             with self.subTest(code=code):
                 self.log.write_text("")
-                result = self.run_auto(f"AUTO_MOCK_KIMI_CODE={code}", name=f"auto-2026-10-16-topic-{code}.md")
+                result = self.run_auto(f"AUTO_MOCK_KIMI_CODE={code}", name=f"auto-{self.day}-topic-{code}.md")
                 self.assertEqual(result.returncode, code)
-                self.assertEqual(self.calls(), [f"kimi|routine|kimi-2026-10-16-topic-{code}.md"])
+                self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-topic-{code}.md"])
                 self.assertNotIn("trying the next eligible reviewer", result.stderr)
+                (self.collab / f"kimi-{self.day}-topic-{code}.diagnostic.json").unlink()
 
     def test_existing_candidate_diagnostic_is_not_retried(self):
-        name = "auto-2026-10-16-attempt-once.md"
+        name = f"auto-{self.day}-attempt-once.md"
         result = self.run_auto("AUTO_MOCK_KIMI_CODE=70", name=name)
         self.assertEqual(result.returncode, 70)
-        self.assertEqual(self.calls(), ["kimi|routine|kimi-2026-10-16-attempt-once.md"])
+        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-attempt-once.md"])
         result = self.run_auto(name=name)
         self.assertEqual(result.returncode, 65)
-        self.assertEqual(self.calls(), ["kimi|routine|kimi-2026-10-16-attempt-once.md"])
+        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-attempt-once.md"])
         self.assertIn("reserved by", result.stderr)
 
     def test_all_preflight_failures_end_with_gemini_fallback_instruction(self):
         result = self.run_auto("AUTO_MOCK_KIMI_CODE=69", "AUTO_MOCK_CLAUDE_CODE=78")
         self.assertEqual(result.returncode, 78)
         self.assertEqual(self.calls(), [
-            "kimi|routine|kimi-2026-10-16-topic.md",
-            "claude|sonnet|claude-2026-10-16-topic.md",
+            f"kimi|routine|kimi-{self.day}-topic.md",
+            f"claude|sonnet|claude-{self.day}-topic.md",
         ])
         self.assertIn("use gemini-review.sh as the fallback reviewer", result.stderr)
 

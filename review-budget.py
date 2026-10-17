@@ -27,19 +27,16 @@ from pathlib import Path
 
 PROVIDERS = ("claude", "codex", "gemini", "kimi")
 NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
-# Calls that fail after model invocation begins are counted conservatively.
-# Preflight failures (authentication, availability, budget refusal) are not.
-# Providers that record an explicit model_invocation_began flag (Kimi) are
-# counted on that flag alone; the reason regex covers the other providers.
-SPENT = re.compile(r"validation|timed out|resolved outside|returned|did not complete|did not succeed|output-token limit")
+# Current wrappers reserve exits 70 and 74 for failures after invocation began.
+# Preflight failures use other exit codes. Kimi also records the boundary
+# explicitly, which takes precedence for interrupted calls.
 
 
 def spent_failure(d):
-    # Providers that record model_invocation_began (Kimi) are decided by the
-    # flag alone; a false flag with a model-sounding reason must not count.
+    # A false flag with a model-sounding reason must not count.
     if "model_invocation_began" in d:
         return d.get("model_invocation_began") is True
-    return bool(SPENT.search(d.get("reason", "")))
+    return True
 
 
 def parse(name):

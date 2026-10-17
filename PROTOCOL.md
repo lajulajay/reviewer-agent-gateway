@@ -24,7 +24,9 @@ Gemini are reviewer-only and never own work.
   entries are never rewritten.
 - **No self-review.** A change is reviewed only by an agent that did not
   author it. Pass `--owner codex|claude` on every reviewer call: automatic
-  selection excludes the owner, the Claude wrapper refuses `--owner claude`,
+  selection excludes the owner; for mixed-authorship packets, pass one
+  `--author codex|claude|kimi` per additional author so automatic selection
+  excludes them too. The Claude wrapper refuses `--owner claude`,
   the Codex wrapper refuses `--owner codex`, and every wrapper records the
   owner in its artifact.
 - **Subscription roster.** `reviewer-roster.json` lists the currently active
@@ -70,11 +72,13 @@ reviewers/gemini-review.sh --owner <codex|claude> <hard|routine> <prompt> .colla
 
 Add `--packet-root <dir>` to use a shared prompt or packet from outside the
 repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
-before the model or tier.
+before the model or tier. For automatic selection of mixed-authorship work,
+repeat `--author <codex|claude|kimi>` for every author besides the owner.
 
 For automatic selection, the `auto-` output name is a template; the artifact
 uses the chosen provider's prefix. New topics go to the active, non-owner
-reviewer with the fewest spent review rounds in that repository today and room
+and non-author reviewer with the fewest spent review rounds in that repository
+today and room
 under that provider's daily cap, with roster order breaking ties. Follow-ups
 stay with the topic's latest eligible reviewer when round records establish one
 unambiguous reviewer; otherwise selection falls back to daily balancing. An
@@ -82,7 +86,8 @@ existing artifact or diagnostic is never retried under the same name. This
 local-history rule balances known gateway usage without pretending to measure
 incomparable provider quotas. The dispatcher fails over only after preflight
 exit 69 or 78, never after a model call, timeout, validation failure, or budget
-refusal; if all candidates fail preflight, use Gemini.
+refusal; if all candidates fail preflight, use Gemini. The template date must
+be today's local date.
 
 Choose the smallest sufficient tier and record the requested tier, selected
 and resolved model(s), and a one-sentence rationale. The higher tier
@@ -121,6 +126,9 @@ Every review call spends the user's plan usage, so the wrappers enforce
 - **Output names** must be `<provider>-YYYY-MM-DD-<topic>[-rNN].md|json`;
   the daily cap reads the date from the name. Automatic selection also accepts
   an `auto-` template but writes the actual artifact with the provider prefix.
+  A refused attempt reserves its name, including budget refusals. If the user
+  approves a budget override, use a new `rNN` name and cite that round in the
+  Decisions entry.
 
 Before requesting another round, the owner checks each finding against the
 evidence. A finding that a script or test disproves is dispositioned
@@ -135,8 +143,8 @@ nothing; the owner checks any quoted code against the packet before acting.
 - Reviewers are read-only. They receive only explicit, sanitized packet
   files and may not edit the repository, mutate production or external
   services, trigger agent runs, place orders, or deploy. The wrappers launch
-  reviewers with tool and subagent access disabled and fail closed if a tool
-  event appears in the provider stream.
+  reviewers with provider-specific tool restrictions; Kimi's custom agent
+  disables tools and subagents, and its wrapper rejects emitted tool events.
 - Give the smallest sufficient packet: exact files or line ranges, the diff
   or commit range, relevant evidence and invariants, the competing claims,
   the exact decision, prohibited actions, and named questions. Do not ask for

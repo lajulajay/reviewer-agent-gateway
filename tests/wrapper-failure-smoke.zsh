@@ -553,8 +553,8 @@ set -e
 jq -e '.reason == "Kimi invocation interrupted before model invocation began (SIGTERM)"' \
   "$kimi_repo/.collab/kimi-$today-interrupt-r01.diagnostic.json" >/dev/null
 [[ "$(python3 "$root/review-budget.py" kimi routine "$kimi_repo/.collab/kimi-$today-interrupt-r02.md")" == "0 0" ]]
-# A Kimi failure after invocation began counts as spent even when the reason
-# has no SPENT keyword (codex r01 F1): the model_invocation_began flag decides.
+# A Kimi failure after invocation began counts as spent; its explicit
+# model_invocation_began flag decides even when the reason text is unusual.
 jq -n '{provider:"kimi",exit_code:70,reason:"Kimi assistant response extraction failed",requested_model:"routine",selected_model:"kimi-code/k3",reasoning_effort:"high",model_invocation_began:true}' \
   > "$broot/.collab/kimi-$today-extract-r01.diagnostic.json"
 [[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-extract-r02.md")" == "1 1" ]]
@@ -565,6 +565,12 @@ jq -n '{provider:"kimi",exit_code:78,reason:"Kimi invocation interrupted before 
 jq -n '{provider:"kimi",exit_code:70,reason:"Kimi invocation returned nonzero after model invocation began (exit 42)",model_invocation_began:false}' \
   > "$broot/.collab/kimi-$today-falseflag-r01.diagnostic.json"
 [[ "$(python3 "$root/review-budget.py" kimi routine "$broot/.collab/kimi-$today-falseflag-r02.md")" == "0 0" ]]
+jq -n '{provider:"claude",exit_code:70,reason:"Claude invocation failed",requested_model:"sonnet"}' \
+  > "$broot/.collab/claude-$today-claudefail-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" claude routine "$broot/.collab/claude-$today-claudefail-r02.md")" == "1 1" ]]
+jq -n '{provider:"codex",exit_code:70,reason:"Codex invocation failed (exit 1)",requested_model:"routine"}' \
+  > "$broot/.collab/codex-$today-codexfail-r01.diagnostic.json"
+[[ "$(python3 "$root/review-budget.py" codex routine "$broot/.collab/codex-$today-codexfail-r02.md")" == "1 1" ]]
 jq -n '{provider:"gemini",exit_code:70,reason:"Gemini hit the output-token limit before finishing the review; split the packet or send a delta"}' \
   > "$broot/.collab/gemini-$today-cutoff-r01.diagnostic.json"
 [[ "$(python3 "$root/review-budget.py" gemini routine "$broot/.collab/gemini-$today-cutoff-r02.json")" == "1 1" ]]

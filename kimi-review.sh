@@ -61,7 +61,7 @@ kimi_version="$(kimi --version 2>> "$stderr" | head -1)" || fail 69 "Kimi Code v
 
 TOOLS: None are available. Review only the text above.
 "; cat "$(dirname "$0")/output-contract.txt"; } > "$combined"
-max_prompt_bytes="${KIMI_MAX_PROMPT_BYTES:-800000}"
+max_prompt_bytes="${KIMI_MAX_PROMPT_BYTES:-100000}"
 [[ "$max_prompt_bytes" == <-> && "$max_prompt_bytes" -ge 1 ]] || fail 64 "KIMI_MAX_PROMPT_BYTES must be a positive integer"
 prompt_bytes="$(wc -c < "$combined" | tr -d ' ')"
 [[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes (kimi takes the prompt as an argument)"
