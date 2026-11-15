@@ -1,0 +1,163 @@
+diff --git a/README.md b/README.md
+index 264072d..79ddd41 100644
+--- a/README.md
++++ b/README.md
+@@ -214,10 +214,14 @@ system prompt, so even small reviews consume measurable quota.
+ The `gemini-model-policy.json` catalog lists approved `agy` model IDs, which
+ carry an effort suffix, with release dates. The `pro`/`hard` tier selects
+ `gemini-3.8-flash-high`; `flash`/`routine` selects the second older approved
+-release, `gemini-3.6-flash-high`. The tier names are kept for consumer
++release. Since 2026-11-15 `agy` offers only Gemini 3.8 Flash, so 3.7 and 3.6
++are marked not included and routine uses `routine_fallback_model`,
++`gemini-3.8-flash-medium`. A fallback must be the hard model's own release at
++another effort; it is used only when two older releases are not approved, and
++may also be named by full ID. The tier names are kept for consumer
+ compatibility and do not imply the model family. `explicit_only_models`
+-(currently `gemini-3.1-pro-high`, which is older than every listed Flash
+-release) are accepted only when named by full ID. Run `agy models` to see what
++(currently none; `gemini-3.1-pro-high` was withdrawn) are accepted only when
++named by full ID. Run `agy models` to see what
+ the account offers and review the catalog when Google ships a model.
+ 
+ Isolation. `agy` is a full agent with shell, file, web, browser, scheduling,
+diff --git a/gemini-model-policy.json b/gemini-model-policy.json
+index ec971fe..026c727 100644
+--- a/gemini-model-policy.json
++++ b/gemini-model-policy.json
+@@ -1,10 +1,11 @@
+ {
+   "hard_model": "gemini-3.8-flash-high",
+   "routine_two_releases_down_scope": "all_models",
++  "routine_fallback_model": "gemini-3.8-flash-medium",
+   "models_newest_first": [
+     {"id": "gemini-3.8-flash-high", "released_on": "2026-09-02", "included_no_credits": true},
+-    {"id": "gemini-3.7-flash-high", "released_on": "2026-08-13", "included_no_credits": true},
+-    {"id": "gemini-3.6-flash-high", "released_on": "2026-07-21", "included_no_credits": true}
++    {"id": "gemini-3.7-flash-high", "released_on": "2026-08-13", "included_no_credits": false},
++    {"id": "gemini-3.6-flash-high", "released_on": "2026-07-21", "included_no_credits": false}
+   ],
+-  "explicit_only_models": ["gemini-3.1-pro-high"]
++  "explicit_only_models": []
+ }
+diff --git a/gemini-model-select.py b/gemini-model-select.py
+index 030c227..f0ccae3 100644
+--- a/gemini-model-select.py
++++ b/gemini-model-select.py
+@@ -50,6 +50,15 @@ def select(policy_path: Path, requested: str) -> str:
+     hard = policy["hard_model"]
+     if hard not in approved:
+         raise ValueError("hard_model is not approved for included usage")
++    # A routine fallback is the hard model's own release at a lower effort, for
++    # when the plan no longer offers two older releases. It has no catalog row
++    # because it shares the hard model's release date.
++    fallback = policy.get("routine_fallback_model")
++    if fallback is not None:
++        if not isinstance(fallback, str) or not MODEL_ID.fullmatch(fallback):
++            raise ValueError(f"invalid routine fallback model ID: {fallback!r}")
++        if fallback.rsplit("-", 1)[0] != hard.rsplit("-", 1)[0] or fallback == hard:
++            raise ValueError("routine_fallback_model must be the hard model's release at another effort")
+     if requested in ("pro", "hard"):
+         return hard
+     if requested in ("flash", "routine"):
+@@ -57,11 +66,13 @@ def select(policy_path: Path, requested: str) -> str:
+         older = approved[approved.index(hard) + 1 :]
+         candidates = [m for m in older if scope == "all_models" or m.split("-")[2] == family]
+         if len(candidates) < 2:
++            if fallback is not None:
++                return fallback
+             raise ValueError("fewer than two older approved releases in routine selection scope")
+         return candidates[1]
+     # Explicit-only models have no release date in the catalog, so tiers never
+     # select them; a caller must name one by its full ID.
+-    if requested in approved or requested in explicit_only:
++    if requested in approved or requested in explicit_only or (fallback is not None and requested == fallback):
+         return requested
+     raise ValueError(f"requested model is not approved for included usage: {requested}")
+ 
+diff --git a/tests/test_gemini_model_select.py b/tests/test_gemini_model_select.py
+new file mode 100644
+index 0000000..dec59ff
+--- /dev/null
++++ b/tests/test_gemini_model_select.py
+@@ -0,0 +1,64 @@
++import importlib.util
++import json
++from pathlib import Path
++import tempfile
++import unittest
++
++ROOT = Path(__file__).resolve().parents[1]
++spec = importlib.util.spec_from_file_location("gemini_model_select", ROOT / "gemini-model-select.py")
++selector = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(selector)
++
++ROWS = [
++    {"id": "gemini-3.8-flash-high", "released_on": "2026-09-02", "included_no_credits": True},
++    {"id": "gemini-3.7-flash-high", "released_on": "2026-08-13", "included_no_credits": False},
++    {"id": "gemini-3.6-flash-high", "released_on": "2026-07-21", "included_no_credits": False},
++]
++
++
++class GeminiModelSelectTests(unittest.TestCase):
++    def select(self, requested, **extra):
++        policy = {
++            "hard_model": "gemini-3.8-flash-high",
++            "routine_two_releases_down_scope": "all_models",
++            "models_newest_first": ROWS,
++            **extra,
++        }
++        with tempfile.TemporaryDirectory() as tmp:
++            path = Path(tmp) / "policy.json"
++            path.write_text(json.dumps(policy))
++            return selector.select(path, requested)
++
++    def test_checked_in_policy_selects_available_models(self):
++        policy = ROOT / "gemini-model-policy.json"
++        self.assertEqual(selector.select(policy, "hard"), "gemini-3.8-flash-high")
++        self.assertEqual(selector.select(policy, "routine"), "gemini-3.8-flash-medium")
++
++    def test_routine_without_fallback_fails_closed(self):
++        with self.assertRaisesRegex(ValueError, "fewer than two older"):
++            self.select("routine")
++
++    def test_fallback_used_only_when_older_releases_are_missing(self):
++        self.assertEqual(self.select("routine", routine_fallback_model="gemini-3.8-flash-low"), "gemini-3.8-flash-low")
++        rows = [dict(row, included_no_credits=True) for row in ROWS]
++        self.assertEqual(
++            self.select("routine", routine_fallback_model="gemini-3.8-flash-low", models_newest_first=rows),
++            "gemini-3.6-flash-high",
++        )
++
++    def test_fallback_must_be_hard_release_at_another_effort(self):
++        for bad in ("gemini-3.7-flash-medium", "gemini-3.8-pro-medium", "gemini-3.8-flash-high", "gemini-3.8-flash-ultra", 7):
++            with self.subTest(bad=bad):
++                with self.assertRaises(ValueError):
++                    self.select("hard", routine_fallback_model=bad)
++
++    def test_fallback_can_be_named_and_unlisted_models_cannot(self):
++        self.assertEqual(self.select("gemini-3.8-flash-medium", routine_fallback_model="gemini-3.8-flash-medium"), "gemini-3.8-flash-medium")
++        with self.assertRaises(ValueError):
++            self.select("gemini-3.8-flash-medium")
++        with self.assertRaises(ValueError):
++            self.select("gemini-3.6-flash-high", routine_fallback_model="gemini-3.8-flash-medium")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index eea8081..2518854 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -291,9 +291,9 @@ jq -e '.response | endswith("VERDICT: ACCEPT")' "$test_root/.collab/gemini-hard.
+ [[ -s "$test_root/.collab/gemini-hard.json.sha256" ]]
+ 
+ GEMINI_MODEL=flash gemini gemini-routine.json env AGY_TEST_MODE=success >/dev/null
+-grep -F -- '--model gemini-3.6-flash-high' "$agy_marker" >/dev/null
+-GEMINI_MODEL=gemini-3.1-pro-high gemini gemini-explicit-pro.json env AGY_TEST_MODE=success >/dev/null
+-grep -F -- '--model gemini-3.1-pro-high' "$agy_marker" >/dev/null
++grep -F -- '--model gemini-3.8-flash-medium' "$agy_marker" >/dev/null
++GEMINI_MODEL=gemini-3.8-flash-medium gemini gemini-explicit-medium.json env AGY_TEST_MODE=success >/dev/null
++grep -F -- '--model gemini-3.8-flash-medium' "$agy_marker" >/dev/null
+ 
+ # Denied tool attempts go through the real hook script and are recorded.
+ gemini gemini-tool.json env AGY_TEST_MODE=tool >/dev/null

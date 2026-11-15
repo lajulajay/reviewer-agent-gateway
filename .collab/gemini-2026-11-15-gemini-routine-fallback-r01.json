@@ -1,0 +1,29 @@
+{
+  "conversation_id": "eac2a56f-ec91-4ea2-a2d9-188952f7b976",
+  "status": "SUCCESS",
+  "response": "### 1. Fallback Model Validation and Activation\n\n* **Validation tightness:** `routine_fallback_model` is validated tightly:\n  * **ID shape:** Enforced via `isinstance(fallback, str)` and regex matching against `MODEL_ID` (`re.compile(r\"gemini-[0-9]+(?:\\.[0-9]+)?-(?:pro|flash)-(?:low|medium|high)\")`).\n  * **Same release and family:** `fallback.rsplit(\"-\", 1)[0] != hard.rsplit(\"-\", 1)[0]` ensures the model name, version number, and family prefix (`gemini-<version>-<family>`) match the vetted `hard_model` exactly.\n  * **Different effort:** `fallback == hard` ensures the effort suffix differs from the hard model.\n* **Activation condition:** The fallback is evaluated only when `len(candidates) < 2` within the filtered routine scope. If two or more older approved releases exist, `candidates[1]` is selected and returned as before.\n* **Hostile / malformed policy resistance:** A malformed or hostile policy cannot cause the selector to return an unvetted model. Validation occurs eagerly before tier or ID resolution; `hard` is required to be present in `approved` (which itself requires validated rows with `included_no_credits: true` and strict release date ordering), and `fallback` is structurally anchored to `hard`.\n\n---\n\n### 2. Consistency of Full ID Requests\n\nAllowing `requested == fallback` when `fallback is not None` is consistent with the rest of the selector. The selector permits any model permitted by the policy to be addressed directly by full ID (`requested in approved or requested in explicit_only`). Because `routine_fallback_model` represents an approved model that shares the hard release date without occupying a distinct row in `models_newest_first`, explicitly allowing it ensures callers can invoke approved models directly without bypassing policy checks.\n\n---\n\n### 3. Test Coverage for Regressions\n\nThe test suite thoroughly covers the new behavior and guardrails:\n* `test_checked_in_policy_selects_available_models`: Validates the actual checked-in policy resolves both `hard` and `routine` as expected.\n* `test_routine_without_fallback_fails_closed`: Verifies that missing fallback fails closed when fewer than two older releases exist.\n* `test_fallback_used_only_when_older_releases_are_missing`: Verifies fallback precedence: used when older releases are unavailable, but bypassed when two older releases are approved.\n* `test_fallback_must_be_hard_release_at_another_effort`: Rejects invalid IDs, non-string types, differing releases (`3.7`), differing families (`pro`), and identical effort levels (`high`).\n* `test_fallback_can_be_named_and_unlisted_models_cannot`: Verifies fallback can be targeted by full ID only when configured, and that unapproved catalog entries remain blocked.\n* `tests/wrapper-failure-smoke.zsh`: Verifies end-to-end wrapper execution with both tier alias (`GEMINI_MODEL=flash`) and explicit ID (`GEMINI_MODEL=gemini-3.8-flash-medium`).\n\n---\n\n### 4. README Accuracy\n\nThe README is accurate. It correctly explains:\n* The 2026-11-15 catalog state where `agy` only offers Gemini 3.8 Flash.\n* The withdrawal of `gemini-3.1-pro-high` from `explicit_only_models`.\n* The configuration of `gemini-3.8-flash-medium` as `routine_fallback_model`.\n* The rule that a fallback must belong to the hard model's release at another effort, activates only when two older releases are not approved, and can also be addressed by full ID.\n\n---\n\nATTESTATION: all actionable findings and conditions are labeled.\nVERDICT: ACCEPT\n",
+  "duration_seconds": 41.3648,
+  "num_turns": 1,
+  "usage": {
+    "input_tokens": 15233,
+    "output_tokens": 5545,
+    "thinking_tokens": 4687,
+    "cache_read_tokens": 0,
+    "total_tokens": 20778
+  },
+  "reviewer_metadata": {
+    "owner": "claude",
+    "wrapper_revision": "0e9136926bfd251c1285061a310e8e309b88fa92",
+    "cli": "agy",
+    "cli_version": "1.5.9",
+    "requested_model": "routine",
+    "preflight_selected_model": "gemini-3.8-flash-medium",
+    "resolved_models": [
+      "gemini-3.8-flash-medium"
+    ],
+    "conversation_id": "eac2a56f-ec91-4ea2-a2d9-188952f7b976",
+    "quota_remaining_before": 0.9679831862449646,
+    "denied_tool_calls": [],
+    "mechanical_checks": []
+  }
+}
