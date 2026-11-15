@@ -214,10 +214,14 @@ system prompt, so even small reviews consume measurable quota.
 The `gemini-model-policy.json` catalog lists approved `agy` model IDs, which
 carry an effort suffix, with release dates. The `pro`/`hard` tier selects
 `gemini-3.8-flash-high`; `flash`/`routine` selects the second older approved
-release, `gemini-3.6-flash-high`. The tier names are kept for consumer
+release. Since 2026-11-15 `agy` offers only Gemini 3.8 Flash, so 3.7 and 3.6
+are marked not included and routine uses `routine_fallback_model`,
+`gemini-3.8-flash-medium`. A fallback must be the hard model's own release at
+another effort; it is used only when two older releases are not approved, and
+may also be named by full ID. The tier names are kept for consumer
 compatibility and do not imply the model family. `explicit_only_models`
-(currently `gemini-3.1-pro-high`, which is older than every listed Flash
-release) are accepted only when named by full ID. Run `agy models` to see what
+(currently none; `gemini-3.1-pro-high` was withdrawn) are accepted only when
+named by full ID. Run `agy models` to see what
 the account offers and review the catalog when Google ships a model.
 
 Isolation. `agy` is a full agent with shell, file, web, browser, scheduling,

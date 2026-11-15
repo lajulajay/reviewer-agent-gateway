@@ -291,9 +291,9 @@ jq -e '.response | endswith("VERDICT: ACCEPT")' "$test_root/.collab/gemini-hard.
 [[ -s "$test_root/.collab/gemini-hard.json.sha256" ]]
 
 GEMINI_MODEL=flash gemini gemini-routine.json env AGY_TEST_MODE=success >/dev/null
-grep -F -- '--model gemini-3.6-flash-high' "$agy_marker" >/dev/null
-GEMINI_MODEL=gemini-3.1-pro-high gemini gemini-explicit-pro.json env AGY_TEST_MODE=success >/dev/null
-grep -F -- '--model gemini-3.1-pro-high' "$agy_marker" >/dev/null
+grep -F -- '--model gemini-3.8-flash-medium' "$agy_marker" >/dev/null
+GEMINI_MODEL=gemini-3.8-flash-medium gemini gemini-explicit-medium.json env AGY_TEST_MODE=success >/dev/null
+grep -F -- '--model gemini-3.8-flash-medium' "$agy_marker" >/dev/null
 
 # Denied tool attempts go through the real hook script and are recorded.
 gemini gemini-tool.json env AGY_TEST_MODE=tool >/dev/null

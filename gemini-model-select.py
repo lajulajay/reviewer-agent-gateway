@@ -50,6 +50,15 @@ def select(policy_path: Path, requested: str) -> str:
     hard = policy["hard_model"]
     if hard not in approved:
         raise ValueError("hard_model is not approved for included usage")
+    # A routine fallback is the hard model's own release at a lower effort, for
+    # when the plan no longer offers two older releases. It has no catalog row
+    # because it shares the hard model's release date.
+    fallback = policy.get("routine_fallback_model")
+    if fallback is not None:
+        if not isinstance(fallback, str) or not MODEL_ID.fullmatch(fallback):
+            raise ValueError(f"invalid routine fallback model ID: {fallback!r}")
+        if fallback.rsplit("-", 1)[0] != hard.rsplit("-", 1)[0] or fallback == hard:
+            raise ValueError("routine_fallback_model must be the hard model's release at another effort")
     if requested in ("pro", "hard"):
         return hard
     if requested in ("flash", "routine"):
@@ -57,11 +66,13 @@ def select(policy_path: Path, requested: str) -> str:
         older = approved[approved.index(hard) + 1 :]
         candidates = [m for m in older if scope == "all_models" or m.split("-")[2] == family]
         if len(candidates) < 2:
+            if fallback is not None:
+                return fallback
             raise ValueError("fewer than two older approved releases in routine selection scope")
         return candidates[1]
     # Explicit-only models have no release date in the catalog, so tiers never
     # select them; a caller must name one by its full ID.
-    if requested in approved or requested in explicit_only:
+    if requested in approved or requested in explicit_only or (fallback is not None and requested == fallback):
         return requested
     raise ValueError(f"requested model is not approved for included usage: {requested}")
 
