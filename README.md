@@ -203,6 +203,34 @@ not reported. `CODEX_MAX_TIME_SECONDS` bounds the call (default 600).
 `CODEX_REVIEW_MODEL_POLICY` may point to another policy file for an isolated
 test.
 
+## API route for Codex and Kimi
+
+`codex-model-policy.json` and `kimi-model-policy.json` carry a `route`:
+`subscription` (the CLI paths described above) or `api`. On the API route the
+wrapper keeps every shared check (identity and vendor rule, output naming,
+review budget, packet safety, output contract, checksums) and replaces only
+the model call with `api-call.py`:
+
+- one tool-free request (`/responses` for OpenAI with `tools: []` and
+  `store: false`; `/chat/completions` for Moonshot), and any tool item in the
+  reply fails the review;
+- the key is read from the Keychain item named by `keychain_service`
+  (`reviewer-gateway-openai`, `reviewer-gateway-moonshot`) inside the process
+  and sent only in the Authorization header;
+- before sending, recorded spend plus the worst case (all input at ~3
+  characters per token plus `max_output_tokens`, at the policy's list prices)
+  must fit `spend_cap_usd`, else exit 79; afterwards the actual cost from
+  reported usage (worst case when usage is missing) is appended to
+  `~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl`, outside every
+  repository;
+- the artifact records `Route: api`, the served model, token usage and cost.
+
+Store a key without exposing it in shell history:
+`read -rs "k?key: " && security add-generic-password -U -a "$USER" -s <service> -w "$k"; unset k`
+(the Keychain's own prompt truncates input at 128 characters, which breaks
+OpenAI project keys). Exit 78 means a missing key or policy before any
+request; 70 means the request was sent and failed.
+
 ## Gemini reviews through Antigravity CLI
 
 The Gemini wrapper runs reviews through the Antigravity CLI (`agy`) on the

@@ -33,6 +33,14 @@ are in the proposal. No production service is changed.
   `GEMINI_REVIEW_MIN_QUOTA=0.03` instead of the 0.15 floor (r01 was refused
   at 0.0799 remaining). Quote: "use the lowered Gemini floor". Accepted risk:
   if the quota runs out during the call, Antigravity may spend AI credits.
+- 2026-11-20, user, scope: Codex and Kimi API routes. Quote: "i have API
+  credits with OpenAI ($20) and Kimi ($11). let's change the route for both
+  from subscription to API or enable both if possible". Keys stored by the
+  user in the Keychain; auto-recharge off; gateway caps $18 (OpenAI) and $10
+  (Kimi) accepted ("done"). Models: OpenAI "revert OpenAi models to 6"
+  corrected to "meant 6.1" (hard `gpt-6.1-sol`, routine `gpt-6.1-terra`);
+  Kimi hard `kimi-k3.1-pro`, routine `kimi-k2.6`. Supersedes: Codex and Kimi
+  inactive.
 - 2026-11-20, user, scope: Copilot running reviewer wrappers. Quote: "if you
   mean am i ok with it, yes".
 

@@ -1,6 +1,19 @@
 {
+  "route": "api",
   "tiers": {
     "hard": {"model": "kimi-code/k3", "reasoning_effort": "high"},
     "routine": {"model": "kimi-code/kimi-for-coding", "reasoning_effort": "low"}
+  },
+  "api": {
+    "style": "chat-completions",
+    "base_url": "https://api.moonshot.ai/v1",
+    "keychain_service": "reviewer-gateway-moonshot",
+    "ledger": "moonshot",
+    "spend_cap_usd": 10,
+    "prices_checked": "2026-11-20, third-party trackers; sponsor to confirm",
+    "tiers": {
+      "hard": {"model": "kimi-k3.1-pro", "max_output_tokens": 32000, "usd_per_1m_input": 2.0, "usd_per_1m_output": 10.0},
+      "routine": {"model": "kimi-k2.6", "max_output_tokens": 16000, "usd_per_1m_input": 0.95, "usd_per_1m_output": 4.0}
+    }
   }
 }

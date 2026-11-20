@@ -34,7 +34,11 @@ registry of agents and the model vendors each one runs.
 - **Subscription roster.** `reviewer-roster.json` lists the currently active
   Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
   or lapses; automatic selection never chooses an inactive reviewer. Gemini is
-  deliberately absent because it is fallback-only.
+  deliberately absent because it is fallback-only. Codex and Kimi may run on
+  a paid API instead of a subscription (`"route": "api"` in their model
+  policy): keys live in the macOS Keychain, and each call is refused before
+  it is sent if it could push recorded spend past the policy's cap (exit 79).
+  Raising a cap or switching a route is the user's decision.
 - **Ownership changes mid-workstream.** After a handoff, the new owner's
   changes go to another eligible reviewer as usual. For a packet that mixes
   both owners' unreviewed work, use an active reviewer that authored none of

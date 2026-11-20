@@ -42,6 +42,12 @@ if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
   wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
   [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
 fi
+# Route (model policy "route"): "api" calls the provider HTTP API with a Keychain key
+# and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
+provider=kimi; policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
+route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read kimi-model-policy.json"
+if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Kimi "$@"; fi
+[[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
 command -v kimi >/dev/null || fail 69 "Kimi Code CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
 policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
 model="$(jq -er --arg tier "$requested_model" '.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Kimi review tier must be one of: $(jq -r '.tiers | keys | join(", ")' "$policy" 2>/dev/null)"

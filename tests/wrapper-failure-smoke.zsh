@@ -8,6 +8,8 @@ trap 'rm -rf "$test_root"' EXIT INT TERM
 # of the working tree rather than through a bypass.
 root="$test_root/gateway"; mkdir -p "$root"
 cp -p "$source_root"/*.sh "$source_root"/*.py "$source_root"/*.json "$source_root"/output-contract.txt "$root"/
+# CLI mocks below exercise the subscription route; the API route has unit tests.
+for p in codex kimi; do jq '.route = "subscription"' "$root/$p-model-policy.json" > "$root/$p.tmp" && mv "$root/$p.tmp" "$root/$p-model-policy.json"; done
 git -C "$root" init -q && git -C "$root" add -A && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m snapshot
 mkdir -p "$test_root/.collab" "$test_root/packet" "$test_root/shared" "$test_root/bin"
 print 'Review prompt.' > "$test_root/prompt.md"

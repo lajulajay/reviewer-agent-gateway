@@ -1,6 +1,37 @@
 {
+  "route": "api",
   "tiers": {
-    "hard": {"model": "gpt-6-sol", "reasoning_effort": "high"},
-    "routine": {"model": "gpt-6-sol", "reasoning_effort": "medium"}
+    "hard": {
+      "model": "gpt-6-sol",
+      "reasoning_effort": "high"
+    },
+    "routine": {
+      "model": "gpt-6-sol",
+      "reasoning_effort": "medium"
+    }
+  },
+  "api": {
+    "style": "openai-responses",
+    "base_url": "https://api.openai.com/v1",
+    "keychain_service": "reviewer-gateway-openai",
+    "ledger": "openai",
+    "spend_cap_usd": 18,
+    "prices_checked": "2026-11-20, OpenAI pricing table via search: 6.1 Sol $2/$10, 6.1 Terra $1/$5; sponsor chose GPT-6.1",
+    "tiers": {
+      "hard": {
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high",
+        "max_output_tokens": 32000,
+        "usd_per_1m_input": 2.0,
+        "usd_per_1m_output": 10.0
+      },
+      "routine": {
+        "model": "gpt-6.1-terra",
+        "reasoning_effort": "medium",
+        "max_output_tokens": 16000,
+        "usd_per_1m_input": 1.0,
+        "usd_per_1m_output": 5.0
+      }
+    }
   }
 }

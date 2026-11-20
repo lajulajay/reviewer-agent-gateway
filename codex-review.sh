@@ -34,6 +34,12 @@ if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
   wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
   [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
 fi
+# Route (model policy "route"): "api" calls the provider HTTP API with a Keychain key
+# and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
+provider=codex; policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
+route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read codex-model-policy.json"
+if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Codex "$@"; fi
+[[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
 command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
 # Reviews run on the ChatGPT plan. An API key would switch Codex to billed
 # API usage, so its presence is refused and the login method is checked.
