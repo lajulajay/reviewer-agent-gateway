@@ -1,0 +1,11 @@
+{
+  "provider": "codex",
+  "owner": "claude",
+  "requested_model": "routine",
+  "selected_model": "",
+  "reason": "gateway wrapper files have uncommitted changes",
+  "exit_code": 78,
+  "elapsed_seconds": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -242,11 +242,25 @@ class ApiCallTest(unittest.TestCase):
         self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
         self.assertEqual(self.committed(), self.bound())
 
-    def test_error_codes_reported_only_when_identifier_shaped(self):
+    def test_error_bodies_are_never_printed(self):
         body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
         self.assertEqual(self.call(policy(), urllib.error.HTTPError("u", 400, "x", {}, body)), 70)
-        self.assertIn("invalid_request_error", self.err)
+        self.assertIn("HTTP 400", self.err)
+        self.assertNotIn("invalid_request_error", self.err)  # no server-supplied field is printed
         self.assertNotIn("leaked prompt", self.err)
+
+    def test_every_ancestor_directory_is_synced(self):
+        synced = []
+        with mock.patch.object(api, "_fsync_dir", synced.append):
+            self.assertEqual(self.call(policy(), openai_reply()), 0)
+        self.assertIn(api.STATE, synced)
+        self.assertIn(Path("/"), synced)
+        self.assertTrue(all(p in synced for p in api.STATE.parents))
+
+    def test_validation_runs_on_the_redacted_text(self):
+        reply = openai_reply(text=SECRET + " " + GOOD)
+        self.assertEqual(self.call(policy(), reply), 0)
+        self.assertNotIn(SECRET, (self.base / "out.md").read_text())
 
     def test_rejected_reply_keeps_full_bound_even_with_zero_usage(self):
         self.assertEqual(self.call(policy(), openai_reply(text="", usage=(0, 0))), 70)

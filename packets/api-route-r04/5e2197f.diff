@@ -1,0 +1,129 @@
+diff --git a/api-call.py b/api-call.py
+index 379e377..b7571d3 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -32,6 +32,7 @@ failed.
+ """
+ 
+ import fcntl
++import re
+ import json
+ import math
+ import os
+@@ -142,16 +143,15 @@ def _fsync_dir(path):
+ 
+ 
+ def reserve(cfg, tier, bound):
+-    created_dir = not STATE.exists()
+     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+-    if created_dir:
+-        _fsync_dir(STATE.parent)
+-    created_file = not ledger_path(cfg).exists()
+     call_id = uuid.uuid4().hex
+     with ledger_path(cfg).open("a+") as fh:
+-        if created_file:
+-            _fsync_dir(STATE)
+         fcntl.flock(fh, fcntl.LOCK_EX)
++        # Under the lock, before any reservation is trusted or sent: make the
++        # directory entries durable every time, so a crash or restart between
++        # creation and use can never drop the ledger's pathname.
++        _fsync_dir(STATE.parent)
++        _fsync_dir(STATE)
+         fh.seek(0)
+         already = committed(fh.read().splitlines())
+         if already + bound > cfg["cap_micro"]:
+@@ -265,7 +265,10 @@ def run(argv):
+         try:
+             err = json.loads(exc.read()[:4000]).get("error")
+             if isinstance(err, dict):
+-                parts = [str(err.get(k))[:40] for k in ("type", "code") if isinstance(err.get(k), (str, int))]
++                # Only short identifier-shaped codes are reported; anything else is server text and dropped.
++                parts = [str(err.get(k)) for k in ("type", "code")
++                         if isinstance(err.get(k), (str, int)) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(err.get(k)))
++                         and redact(str(err.get(k))) == str(err.get(k))]
+                 detail = " (" + ", ".join(parts) + ")" if parts else ""
+         except Exception:
+             pass  # the body is never echoed: it is untrusted and may quote the request
+@@ -276,6 +279,13 @@ def run(argv):
+     reply, problem, tin, tout, served = parse(cfg, data)
+     if not problem and not reply.strip():
+         problem = "no text in reply"
++    if not problem:
++        # The gateway's substance check runs before settling, so a reply it
++        # rejects keeps the full bound like any other rejected reply.
++        check = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "reviewer-validate.py")],
++                               input=reply, capture_output=True, text=True)
++        if check.returncode != 0:
++            problem = "substance validation failed"
+     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
+     if problem:
+         cost, note = bound, f"reply rejected ({problem}): full bound kept"
+diff --git a/api-route.sh b/api-route.sh
+index af02ab3..4040c2b 100644
+--- a/api-route.sh
++++ b/api-route.sh
+@@ -44,11 +44,17 @@ TOOLS: None are available. Review only the text above.
+   served="$(jq -r '.served_model // "not reported"' "$tmp/api.json")" || fail 70 "cannot read API metadata"
+   usage="$(jq -c '{input_tokens, output_tokens}' "$tmp/api.json")" || fail 70 "cannot read API metadata"
+   cost="$(jq -r '"$\(.cost_usd) (ledger committed $\(.ledger_committed_usd) of $\(.spend_cap_usd) cap)"' "$tmp/api.json")" || fail 70 "cannot read API metadata"
+-  { print "# $title review"; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"
+-    print "Wrapper revision: $wrapper_rev"; print "Route: api"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"
+-    print "Resolved model(s): $served"; print "Usage: $usage"; print "API cost: $cost"
+-    [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"
+-    while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; } > "$tmp/final.md" || fail 70 "cannot write the $title artifact"
++  # The header is built by assignments (which cannot fail) and written once.
++  local header="# $title review"$'\n\n' note
++  [[ -z "$owner" ]] || header+="Owner: $owner"$'\n'
++  [[ $#authors -eq 0 ]] || header+="Authors: ${(j:, :)authors}"$'\n'
++  [[ $#author_models -eq 0 ]] || header+="Author models: ${(j:, :)author_models}"$'\n'
++  [[ -z "$task" ]] || header+="Task: $task"$'\n'
++  header+="Wrapper revision: $wrapper_rev"$'\n'"Route: api"$'\n'"Requested model: $requested_model"$'\n'"Selected model: $model"$'\n'"Reasoning effort: $effort"$'\n'
++  header+="Resolved model(s): $served"$'\n'"Usage: $usage"$'\n'"API cost: $cost"$'\n'
++  [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || header+="Budget override: $REVIEW_BUDGET_OVERRIDE"$'\n'
++  while IFS= read -r note; do [[ -z "$note" ]] || header+="Mechanical check: $note"$'\n'; done <<< "$checks"
++  print -r -- "$header" > "$tmp/final.md" || fail 70 "cannot write the $title artifact"
+   cat "$last" >> "$tmp/final.md" || fail 70 "cannot write the $title artifact"
+   { chmod 444 "$tmp/final.md" && mv "$tmp/final.md" "$output" && shasum -a 256 "$output" > "$output.sha256" && chmod 444 "$output.sha256"; } || fail 70 "cannot store the $title artifact or checksum"
+   [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "$title artifact or checksum was not created"
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index beff1c1..1b08a83 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -40,7 +40,10 @@ def policy(style="openai-responses", cap=18.0, **tier):
+                     "ledger": "test", "spend_cap_usd": cap, "tiers": {"hard": t}}}
+ 
+ 
+-def openai_reply(text="VERDICT: ACCEPT", status="completed", usage=(1000, 500), extra=()):
++GOOD = ("The packet is internally consistent and the proposed boundary is testable. " * 8 + "\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT")
++
++
++def openai_reply(text=GOOD, status="completed", usage=(1000, 500), extra=()):
+     out = [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": text}]}, *extra]
+     r = {"model": "gpt-6.1-sol", "status": status, "output": out}
+     if usage:
+@@ -113,7 +116,7 @@ class ApiCallTest(unittest.TestCase):
+         self.assertTrue(self.marker.exists())
+ 
+     def test_chat_request_asks_for_one_choice(self):
+-        reply = {"model": "k", "choices": [{"finish_reason": "stop", "message": {"content": "VERDICT: ACCEPT"}}],
++        reply = {"model": "k", "choices": [{"finish_reason": "stop", "message": {"content": GOOD}}],
+                  "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+         self.assertEqual(self.call(policy("chat-completions"), reply), 0)
+         self.assertTrue(self.sent[0][0].endswith("/chat/completions"))
+@@ -235,6 +238,16 @@ class ApiCallTest(unittest.TestCase):
+                 self.assertEqual(self.call(policy(style), reply), 70)
+                 self.assertFalse((self.base / "out.md").exists())
+ 
++    def test_substance_rejected_reply_keeps_full_bound(self):
++        self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_error_codes_reported_only_when_identifier_shaped(self):
++        body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
++        self.assertEqual(self.call(policy(), urllib.error.HTTPError("u", 400, "x", {}, body)), 70)
++        self.assertIn("invalid_request_error", self.err)
++        self.assertNotIn("leaked prompt", self.err)
++
+     def test_rejected_reply_keeps_full_bound_even_with_zero_usage(self):
+         self.assertEqual(self.call(policy(), openai_reply(text="", usage=(0, 0))), 70)
+         self.assertEqual(self.committed(), self.bound())

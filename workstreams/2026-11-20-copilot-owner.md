@@ -51,6 +51,7 @@ are in the proposal. No production service is changed.
 | r01 | Codex API (`gpt-6.1-sol`) | hard; first review of the spend-capped API route, which handles keys and money | `.collab/codex-2026-11-20-api-route-r01.md` (SHA-256 `cd7f8ffcfa4b0777932fa480de1f66e9fc97d808b7ed3fa84c8168e720348241`) | REJECT |
 | r03 | Codex API (`gpt-6.1-terra`) | routine; follow-up of r01 (file name `-r02`) | `.collab/codex-2026-11-20-api-route-r02.md` (SHA-256 `5806cc886f55296e7f064d693ec5808d7712fb51533852c092b867d2991ac8fb`) | REJECT |
 | r04 | Codex API (`gpt-6.1-terra`) | routine; follow-up (file name `-r03`) | `.collab/codex-2026-11-20-api-route-r03.md` (SHA-256 `3f864ec92a67cc548e4c49cb86ce8dd902b1d2c7e542543fc5cf0b59f1dc976b`) | REJECT |
+| r05 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-20-api-route-r05.md` (SHA-256 `3d5f48bb5cbf2f96455d58d6cf845000065efe414a5528727db6ecd7d16654ac`) | REJECT |
 | r02 | Gemini (`gemini-3.8-flash-high`) | hard; changes who may review whom in every repository | `.collab/gemini-2026-11-20-copilot-owner-phase1-r02.json` (SHA-256 `99fec6f5c65f9d9c90020c7a80c2573439345f22930beb35dc125ab18a612fe7`) | ACCEPT WITH CONDITIONS |
 
 r01 (`.collab/gemini-2026-11-20-copilot-owner-phase1-r01.diagnostic.json`) was
@@ -68,7 +69,7 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
 | R01-F5 | blocker | | open: locked, fsynced reserve-then-settle ledger; crash keeps reservation; concurrency test; remainder tracked as R03-F3 |
 | R01-F6 | blocker | | open: failures and missing usage keep the full reservation; only 400/401/403/404/422 release; remainder tracked as R03-F4 |
 | R01-F7 | major | verified r04 | resolved |
-| R01-F8 | major | | open: send marker drives exit codes and Kimi `model_invocation_began`; post-send steps fail 70; smoke cases; remainder tracked as R03-F6, R03-F7 |
+| R01-F8 | major | verified r05 | resolved |
 | R01-F9 | major | verified r04 | resolved |
 | R01-F10 | major | verified r03 | resolved |
 | R01-F11 | minor | | open: README and PROTOCOL rewritten to match; roster wording covers API reviewers; remainder tracked as R03-F4 |
@@ -85,7 +86,18 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
 | R04-F1 | major | | open: error type/code reported only if identifier-shaped and unchanged by redaction; awaiting r05 |
 | R04-F2 | major | | open: parent and state directories fsynced under the lock on every reservation; awaiting r05 |
 | R04-F3 | major | | open: api-call runs the substance validator before settling; rejected replies keep the full bound; awaiting r05 |
-| R04-F4 | major | | open: artifact header built by assignments and written once; awaiting r05 |
+| R04-F4 | major | verified r05 | resolved |
+| R05-F1 | major | | open: no field of an error body is printed; HTTP status only; awaiting r06 |
+| R05-F2 | major | | open: STATE and every ancestor to / fsynced under the lock on each reservation; awaiting r06 |
+| R05-F3 | major | | open: reply redacted first; that exact text is validated, settled and stored; awaiting r06 |
+| R05-C1 | condition | | open: r06 packet includes the raw r02 review so R03-F1 can be checked |
+| R05-C2 | condition | | open: r06 packet includes the raw r02 review so R03-F2 can be checked |
+| R05-C3 | condition | | open: r06 packet includes the raw r02 review so R03-F3 can be checked |
+| R05-C4 | condition | | open: r06 packet includes the raw r02 review so R03-F4 can be checked |
+| R05-C5 | condition | | open: r06 packet includes the raw r02 review so R03-F5 can be checked |
+| R05-C6 | condition | | open: r06 packet includes the raw r02 review so R03-F6 can be checked |
+| R05-C7 | condition | | open: r06 packet includes the raw r02 review so R03-F7 can be checked |
+| R05-C8 | condition | | open: r06 packet includes the raw r02 review so R03-F8 can be checked |
 | R02-F1 | minor | fixed 605cdc0 | proposal moves task-table checks to Phase 3 with the template; pending push |
 | R02-F2 | minor | fixed 605cdc0 | PROTOCOL synopses list `--author` and `--task`; pending push |
 | R02-C1 | condition | | open: fixed in 605cdc0; no Gemini quota for a check round, awaiting sponsor acceptance |
@@ -115,3 +127,4 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
   kept beside them). Follow-up r02 to verify.
 - 2026-11-20: Codex r02 (indexed r03): R01-F1, F4, F10 resolved; eight narrower findings fixed. Manual Moonshot reply-shape probe ($0.0002) entered in the ledger by hand.
 - 2026-11-20: Codex r03 (indexed r04): R01-F2, F7, F9 resolved; four remaining items fixed.
+- 2026-11-20: first round-4 attempt refused at preflight (packet copies named .py/.sh tripped the dirty check; `.collab/codex-2026-11-20-api-route-r04.diagnostic.json`, no model call). Codex r05: R01-F8 and R04-F4 resolved; three items fixed; R03 items need the r02 text, supplied in r06 (last round for this topic).
