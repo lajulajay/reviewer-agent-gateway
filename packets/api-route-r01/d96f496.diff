@@ -1,0 +1,526 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index 07a4616..d3145e4 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -34,7 +34,11 @@ registry of agents and the model vendors each one runs.
+ - **Subscription roster.** `reviewer-roster.json` lists the currently active
+   Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
+   or lapses; automatic selection never chooses an inactive reviewer. Gemini is
+-  deliberately absent because it is fallback-only.
++  deliberately absent because it is fallback-only. Codex and Kimi may run on
++  a paid API instead of a subscription (`"route": "api"` in their model
++  policy): keys live in the macOS Keychain, and each call is refused before
++  it is sent if it could push recorded spend past the policy's cap (exit 79).
++  Raising a cap or switching a route is the user's decision.
+ - **Ownership changes mid-workstream.** After a handoff, the new owner's
+   changes go to another eligible reviewer as usual. For a packet that mixes
+   both owners' unreviewed work, use an active reviewer that authored none of
+diff --git a/README.md b/README.md
+index a806363..4b718e6 100644
+--- a/README.md
++++ b/README.md
+@@ -203,6 +203,34 @@ not reported. `CODEX_MAX_TIME_SECONDS` bounds the call (default 600).
+ `CODEX_REVIEW_MODEL_POLICY` may point to another policy file for an isolated
+ test.
+ 
++## API route for Codex and Kimi
++
++`codex-model-policy.json` and `kimi-model-policy.json` carry a `route`:
++`subscription` (the CLI paths described above) or `api`. On the API route the
++wrapper keeps every shared check (identity and vendor rule, output naming,
++review budget, packet safety, output contract, checksums) and replaces only
++the model call with `api-call.py`:
++
++- one tool-free request (`/responses` for OpenAI with `tools: []` and
++  `store: false`; `/chat/completions` for Moonshot), and any tool item in the
++  reply fails the review;
++- the key is read from the Keychain item named by `keychain_service`
++  (`reviewer-gateway-openai`, `reviewer-gateway-moonshot`) inside the process
++  and sent only in the Authorization header;
++- before sending, recorded spend plus the worst case (all input at ~3
++  characters per token plus `max_output_tokens`, at the policy's list prices)
++  must fit `spend_cap_usd`, else exit 79; afterwards the actual cost from
++  reported usage (worst case when usage is missing) is appended to
++  `~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl`, outside every
++  repository;
++- the artifact records `Route: api`, the served model, token usage and cost.
++
++Store a key without exposing it in shell history:
++`read -rs "k?key: " && security add-generic-password -U -a "$USER" -s <service> -w "$k"; unset k`
++(the Keychain's own prompt truncates input at 128 characters, which breaks
++OpenAI project keys). Exit 78 means a missing key or policy before any
++request; 70 means the request was sent and failed.
++
+ ## Gemini reviews through Antigravity CLI
+ 
+ The Gemini wrapper runs reviews through the Antigravity CLI (`agy`) on the
+diff --git a/api-call.py b/api-call.py
+new file mode 100644
+index 0000000..b5de85f
+--- /dev/null
++++ b/api-call.py
+@@ -0,0 +1,175 @@
++#!/usr/bin/env python3
++"""One tool-free review call through a provider's HTTP API, with a spend cap.
++
++  api-call.py POLICY_JSON TIER PROMPT_FILE OUT_TEXT OUT_META
++
++POLICY_JSON's "api" object names the endpoint style ("openai-responses" or
++"chat-completions"), base URL, Keychain service holding the key, spend cap
++and ledger name, and per-tier model, effort, max output tokens and prices
++(USD per 1M tokens). The key is read from the macOS Keychain inside this
++process and sent only in the Authorization header; it is never written to
++disk, argv, logs or artifacts. No tools are offered to the model.
++
++Before the call, the worst case (all input + max output tokens at list price)
++plus the ledger's recorded spend must stay within the cap. After the call the
++actual cost from reported usage is appended to the ledger
++(~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl, outside any repo).
++
++Exit: 0 ok; 64 usage; 78 not configured / key missing (before any request);
++79 spend cap refusal (before any request); 70 request sent but failed.
++"""
++
++import json
++import os
++import subprocess
++import sys
++import time
++import urllib.error
++import urllib.request
++from datetime import datetime, timezone
++from pathlib import Path
++
++STATE = Path(os.environ.get("REVIEWER_API_STATE_DIR", Path.home() / ".local/state/reviewer-gateway"))
++
++
++def die(code, msg):
++    print(msg, file=sys.stderr)
++    sys.exit(code)
++
++
++def load(policy_path, tier):
++    try:
++        api = json.loads(Path(policy_path).read_text())["api"]
++        t = api["tiers"][tier]
++        cfg = {
++            "style": api["style"], "base_url": api["base_url"].rstrip("/"),
++            "keychain_service": api["keychain_service"], "ledger": api["ledger"],
++            "spend_cap_usd": float(api["spend_cap_usd"]), "model": t["model"],
++            "effort": t.get("reasoning_effort"), "max_output_tokens": int(t["max_output_tokens"]),
++            "usd_in": float(t["usd_per_1m_input"]), "usd_out": float(t["usd_per_1m_output"]),
++        }
++    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
++        die(78, f"API review policy is incomplete for tier {tier!r}: {exc}")
++    if cfg["style"] not in ("openai-responses", "chat-completions"):
++        die(78, f"unknown API style {cfg['style']!r}")
++    if not cfg["base_url"].startswith("https://"):
++        die(78, "API base_url must be https")
++    return cfg
++
++
++def ledger_path(cfg):
++    return STATE / f"api-spend-{cfg['ledger']}.jsonl"
++
++
++def spent(cfg):
++    path = ledger_path(cfg)
++    if not path.exists():
++        return 0.0
++    total = 0.0
++    for line in path.read_text().splitlines():
++        if line.strip():
++            total += float(json.loads(line)["cost_usd"])
++    return total
++
++
++def key(cfg):
++    if sys.platform != "darwin":
++        die(78, "API reviews read keys from the macOS Keychain")
++    r = subprocess.run(["security", "find-generic-password", "-a", os.environ.get("USER", ""),
++                        "-s", cfg["keychain_service"], "-w"], capture_output=True, text=True)
++    k = r.stdout.strip()
++    if r.returncode != 0 or not k:
++        die(78, f"no Keychain item {cfg['keychain_service']!r}; store the key with security add-generic-password")
++    return k
++
++
++def request(cfg, text):
++    if cfg["style"] == "openai-responses":
++        body = {"model": cfg["model"], "input": text, "max_output_tokens": cfg["max_output_tokens"],
++                "store": False, "tools": []}
++        if cfg["effort"]:
++            body["reasoning"] = {"effort": cfg["effort"]}
++        return cfg["base_url"] + "/responses", body
++    body = {"model": cfg["model"], "messages": [{"role": "user", "content": text}],
++            "max_tokens": cfg["max_output_tokens"]}
++    return cfg["base_url"] + "/chat/completions", body
++
++
++def parse(cfg, data):
++    if cfg["style"] == "openai-responses":
++        parts = [c.get("text", "") for item in data.get("output", []) if item.get("type") == "message"
++                 for c in item.get("content", []) if c.get("type") == "output_text"]
++        tools = [item.get("type") for item in data.get("output", [])
++                 if item.get("type") not in ("message", "reasoning")]
++        u = data.get("usage") or {}
++        return "".join(parts), tools, u.get("input_tokens"), u.get("output_tokens"), data.get("model"), data.get("status")
++    choice = (data.get("choices") or [{}])[0]
++    msg = choice.get("message") or {}
++    tools = ["tool_calls"] if msg.get("tool_calls") else []
++    u = data.get("usage") or {}
++    return msg.get("content") or "", tools, u.get("prompt_tokens"), u.get("completion_tokens"), data.get("model"), choice.get("finish_reason")
++
++
++def main(argv):
++    if len(argv) != 6:
++        die(64, __doc__.strip().splitlines()[2].strip())
++    policy, tier, prompt_file, out_text, out_meta = argv[1:]
++    cfg = load(policy, tier)
++    text = Path(prompt_file).read_text()
++    # Conservative token bound: ~3 characters per token for code-heavy packets.
++    est_in = len(text) // 3 + 1
++    worst = est_in * cfg["usd_in"] / 1e6 + cfg["max_output_tokens"] * cfg["usd_out"] / 1e6
++    already = spent(cfg)
++    if already + worst > cfg["spend_cap_usd"]:
++        die(79, f"API spend cap: ${already:.2f} spent + ${worst:.2f} worst case exceeds the "
++                f"${cfg['spend_cap_usd']:.2f} cap for {cfg['ledger']}; only the user may raise it")
++    url, body = request(cfg, text)
++    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
++        "Content-Type": "application/json", "Authorization": f"Bearer {key(cfg)}"})
++    timeout = int(os.environ.get("REVIEWER_API_TIMEOUT_SECONDS", "900"))
++    start = time.time()
++    try:
++        with urllib.request.urlopen(req, timeout=timeout) as resp:
++            data = json.loads(resp.read())
++    except urllib.error.HTTPError as exc:
++        detail = exc.read()[:500].decode(errors="replace")
++        record(cfg, tier, 0, 0, worst_case=True, note=f"HTTP {exc.code}")
++        die(70, f"API request failed: HTTP {exc.code}: {detail}")
++    except (urllib.error.URLError, TimeoutError, OSError) as exc:
++        record(cfg, tier, 0, 0, worst_case=True, note=f"transport error: {exc}")
++        die(70, f"API request failed: {exc}")
++    reply, tools, tin, tout, served, status = parse(cfg, data)
++    cost = record(cfg, tier, tin, tout, worst_case=tin is None or tout is None)
++    meta = {"route": "api", "endpoint": url, "selected_model": cfg["model"], "served_model": served,
++            "reasoning_effort": cfg["effort"], "status": status, "input_tokens": tin, "output_tokens": tout,
++            "cost_usd": round(cost, 6), "ledger_spent_usd": round(already + cost, 6),
++            "spend_cap_usd": cfg["spend_cap_usd"], "tool_items": tools, "elapsed_seconds": round(time.time() - start, 1)}
++    Path(out_meta).write_text(json.dumps(meta))
++    if tools:
++        die(70, f"API response contained tool items {tools}; reviews must be tool-free")
++    if not reply.strip():
++        die(70, f"API returned no text (status {status})")
++    Path(out_text).write_text(reply)
++    return 0
++
++
++def record(cfg, tier, tin, tout, worst_case=False, note=None):
++    """Append the call's cost to the ledger; unknown usage is charged at the worst case."""
++    if worst_case:
++        cost = cfg["max_output_tokens"] * cfg["usd_out"] / 1e6 + (tin or 0) * cfg["usd_in"] / 1e6
++        if note and note.startswith("HTTP 4"):
++            cost = 0.0  # rejected before generation (auth, validation, quota)
++    else:
++        cost = tin * cfg["usd_in"] / 1e6 + tout * cfg["usd_out"] / 1e6
++    STATE.mkdir(parents=True, exist_ok=True)
++    entry = {"at": datetime.now(timezone.utc).isoformat(), "tier": tier, "model": cfg["model"],
++             "input_tokens": tin, "output_tokens": tout, "cost_usd": round(cost, 6), "estimated": worst_case}
++    if note:
++        entry["note"] = note
++    with ledger_path(cfg).open("a") as fh:
++        fh.write(json.dumps(entry) + "\n")
++    return cost
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv))
+diff --git a/api-route.sh b/api-route.sh
+new file mode 100644
+index 0000000..d7a54cf
+--- /dev/null
++++ b/api-route.sh
+@@ -0,0 +1,42 @@
++# Sourced by codex-review.sh and kimi-review.sh when their model policy sets
++# "route": "api". Expects the caller's fail, safe, and variables (provider,
++# policy, requested_model, prompt, outdir, base, output, tmp, stderr, combined,
++# last, owner, authors, author_models, task, wrapper_rev). The call itself is
++# api-call.py: tool-free, key from the Keychain, spend-capped. Never returns.
++api_route() {
++  local title="$1"; shift
++  command -v jq >/dev/null || fail 69 "jq is required"
++  safe "$prompt" prompt; prompt="$REPLY"
++  model="$(jq -er --arg tier "$requested_model" '.api.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "$title API review tier must be one of: $(jq -r '.api.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
++  effort="$(jq -r --arg tier "$requested_model" '.api.tiers[$tier].reasoning_effort // "not set"' "$policy")"
++  local budget_tier="$requested_model"
++  [[ "$requested_model" == hard ]] || budget_tier=routine
++  budget="$(python3 "${0:A:h}/review-budget.py" "$provider" "$budget_tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
++  { cat "$prompt"; for f in "$@"; do safe "$f" packet; printf '\n\n===== %s =====\n' "$(basename "$REPLY")"; cat "$REPLY"; done
++    print -r -- "
++
++TOOLS: None are available. Review only the text above.
++"; cat "${0:A:h}/output-contract.txt"; } > "$combined"
++  model_invocation_started=1
++  local code
++  set +e
++  python3 "${0:A:h}/api-call.py" "$policy" "$requested_model" "$combined" "$last" "$tmp/api.json" 2>> "$stderr"
++  code=$?
++  set -e
++  # 78/79/64 are refusals before any request; anything else after it was sent.
++  if [[ $code -eq 78 || $code -eq 79 || $code -eq 64 ]]; then model_invocation_started=0; fail $code "$(tail -1 "$stderr")"; fi
++  [[ $code -eq 0 ]] || fail 70 "$title API call failed: $(tail -1 "$stderr")"
++  python3 "${0:A:h}/reviewer-validate.py" < "$last" || fail 70 "$title response failed substance validation"
++  local checks; checks="$(python3 "${0:A:h}/reviewer-claims.py" < "$last")"
++  { print "# $title review"; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"
++    print "Wrapper revision: $wrapper_rev"; print "Route: api"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"
++    print "Resolved model(s): $(jq -r '.served_model // "not reported"' "$tmp/api.json")"
++    print "Usage: $(jq -c '{input_tokens, output_tokens}' "$tmp/api.json")"
++    print "API cost: $(jq -r '"$\(.cost_usd) (ledger $\(.ledger_spent_usd) of $\(.spend_cap_usd) cap)"' "$tmp/api.json")"
++    [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"
++    while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
++  chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"
++  [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "$title artifact or checksum was not created"
++  print "captured $output"
++  exit 0
++}
+diff --git a/codex-model-policy.json b/codex-model-policy.json
+index 85ee974..daf9d71 100644
+--- a/codex-model-policy.json
++++ b/codex-model-policy.json
+@@ -1,6 +1,37 @@
+ {
++  "route": "api",
+   "tiers": {
+-    "hard": {"model": "gpt-6-sol", "reasoning_effort": "high"},
+-    "routine": {"model": "gpt-6-sol", "reasoning_effort": "medium"}
++    "hard": {
++      "model": "gpt-6-sol",
++      "reasoning_effort": "high"
++    },
++    "routine": {
++      "model": "gpt-6-sol",
++      "reasoning_effort": "medium"
++    }
++  },
++  "api": {
++    "style": "openai-responses",
++    "base_url": "https://api.openai.com/v1",
++    "keychain_service": "reviewer-gateway-openai",
++    "ledger": "openai",
++    "spend_cap_usd": 18,
++    "prices_checked": "2026-11-20, OpenAI pricing table via search: 6.1 Sol $2/$10, 6.1 Terra $1/$5; sponsor chose GPT-6.1",
++    "tiers": {
++      "hard": {
++        "model": "gpt-6.1-sol",
++        "reasoning_effort": "high",
++        "max_output_tokens": 32000,
++        "usd_per_1m_input": 2.0,
++        "usd_per_1m_output": 10.0
++      },
++      "routine": {
++        "model": "gpt-6.1-terra",
++        "reasoning_effort": "medium",
++        "max_output_tokens": 16000,
++        "usd_per_1m_input": 1.0,
++        "usd_per_1m_output": 5.0
++      }
++    }
+   }
+ }
+diff --git a/codex-review.sh b/codex-review.sh
+index 87100cc..3d098e8 100755
+--- a/codex-review.sh
++++ b/codex-review.sh
+@@ -34,6 +34,12 @@ if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
+   wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
+   [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
+ fi
++# Route (model policy "route"): "api" calls the provider HTTP API with a Keychain key
++# and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
++provider=codex; policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
++route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read codex-model-policy.json"
++if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Codex "$@"; fi
++[[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
+ command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ # Reviews run on the ChatGPT plan. An API key would switch Codex to billed
+ # API usage, so its presence is refused and the login method is checked.
+diff --git a/kimi-model-policy.json b/kimi-model-policy.json
+index e22fa4e..92bc802 100644
+--- a/kimi-model-policy.json
++++ b/kimi-model-policy.json
+@@ -1,6 +1,19 @@
+ {
++  "route": "api",
+   "tiers": {
+     "hard": {"model": "kimi-code/k3", "reasoning_effort": "high"},
+     "routine": {"model": "kimi-code/kimi-for-coding", "reasoning_effort": "low"}
++  },
++  "api": {
++    "style": "chat-completions",
++    "base_url": "https://api.moonshot.ai/v1",
++    "keychain_service": "reviewer-gateway-moonshot",
++    "ledger": "moonshot",
++    "spend_cap_usd": 10,
++    "prices_checked": "2026-11-20, third-party trackers; sponsor to confirm",
++    "tiers": {
++      "hard": {"model": "kimi-k3.1-pro", "max_output_tokens": 32000, "usd_per_1m_input": 2.0, "usd_per_1m_output": 10.0},
++      "routine": {"model": "kimi-k2.6", "max_output_tokens": 16000, "usd_per_1m_input": 0.95, "usd_per_1m_output": 4.0}
++    }
+   }
+ }
+diff --git a/kimi-review.sh b/kimi-review.sh
+index 24379dd..5d784b5 100755
+--- a/kimi-review.sh
++++ b/kimi-review.sh
+@@ -42,6 +42,12 @@ if git -C "$(dirname "$0")" rev-parse --git-dir >/dev/null 2>&1; then
+   wrapper_dirty="$(git -C "$(dirname "$0")" status --porcelain -- '*.sh' '*.py' '*.json' output-contract.txt ':(exclude).collab' 2>/dev/null)" || fail 78 "cannot read gateway status"
+   [[ -z "$wrapper_dirty" ]] || fail 78 "gateway wrapper files have uncommitted changes"
+ fi
++# Route (model policy "route"): "api" calls the provider HTTP API with a Keychain key
++# and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
++provider=kimi; policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
++route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read kimi-model-policy.json"
++if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Kimi "$@"; fi
++[[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
+ command -v kimi >/dev/null || fail 69 "Kimi Code CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
+ model="$(jq -er --arg tier "$requested_model" '.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "Kimi review tier must be one of: $(jq -r '.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
+diff --git a/reviewer-roster.json b/reviewer-roster.json
+index 6ce5320..3322282 100644
+--- a/reviewer-roster.json
++++ b/reviewer-roster.json
+@@ -1 +1 @@
+-{"active_reviewers": ["claude"], "tie_break_order": ["kimi", "claude", "codex"]}
++{"active_reviewers": ["kimi", "claude", "codex"], "tie_break_order": ["kimi", "claude", "codex"]}
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+new file mode 100644
+index 0000000..d3f023f
+--- /dev/null
++++ b/tests/test_api_call.py
+@@ -0,0 +1,113 @@
++#!/usr/bin/env python3
++import importlib.util
++import io
++import json
++import tempfile
++import unittest
++import urllib.error
++from pathlib import Path
++from unittest import mock
++
++ROOT = Path(__file__).resolve().parent.parent
++_spec = importlib.util.spec_from_file_location("api_call", ROOT / "api-call.py")
++api = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(api)
++
++
++class Resp(io.BytesIO):
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *a):
++        return False
++
++
++def policy(style="openai-responses", cap=18.0):
++    return {"api": {"style": style, "base_url": "https://api.example.test/v1", "keychain_service": "svc",
++                    "ledger": "test", "spend_cap_usd": cap,
++                    "tiers": {"hard": {"model": "gpt-6.1-sol", "reasoning_effort": "high", "max_output_tokens": 1000,
++                                       "usd_per_1m_input": 2.0, "usd_per_1m_output": 10.0}}}}
++
++
++class ApiCallTest(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.base = Path(self.tmp.name)
++        api.STATE = self.base / "state"
++        (self.base / "prompt.txt").write_text("Review this.\n")
++        self.sent = []
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def run_call(self, pol, reply, tier="hard"):
++        (self.base / "policy.json").write_text(json.dumps(pol))
++
++        def fake_urlopen(req, timeout):
++            self.sent.append((req.full_url, dict(req.header_items()), json.loads(req.data)))
++            if isinstance(reply, Exception):
++                raise reply
++            return Resp(json.dumps(reply).encode())
++
++        argv = ["api-call.py", str(self.base / "policy.json"), tier, str(self.base / "prompt.txt"),
++                str(self.base / "out.md"), str(self.base / "meta.json")]
++        with mock.patch.object(api, "key", return_value="sk-test-secret"), \
++                mock.patch.object(api.urllib.request, "urlopen", fake_urlopen):
++            try:
++                return api.main(argv)
++            except SystemExit as exc:
++                return exc.code
++
++    def ledger(self):
++        path = api.STATE / "api-spend-test.jsonl"
++        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
++
++    def test_openai_success_records_cost_and_sends_no_tools(self):
++        reply = {"model": "gpt-6.1-sol-2026", "status": "completed",
++                 "output": [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": "VERDICT: ACCEPT"}]}],
++                 "usage": {"input_tokens": 1000, "output_tokens": 500}}
++        self.assertEqual(self.run_call(policy(), reply), 0)
++        url, headers, body = self.sent[0]
++        self.assertTrue(url.endswith("/responses"))
++        self.assertEqual(body["tools"], [])
++        self.assertFalse(body["store"])
++        self.assertEqual(body["reasoning"], {"effort": "high"})
++        self.assertEqual((self.base / "out.md").read_text(), "VERDICT: ACCEPT")
++        meta = json.loads((self.base / "meta.json").read_text())
++        self.assertAlmostEqual(meta["cost_usd"], 1000 * 2 / 1e6 + 500 * 10 / 1e6)
++        self.assertNotIn("sk-test-secret", (self.base / "meta.json").read_text())
++        self.assertNotIn("sk-test-secret", (api.STATE / "api-spend-test.jsonl").read_text())
++
++    def test_chat_completions_and_tool_calls_rejected(self):
++        reply = {"model": "kimi-k3.1-pro", "choices": [{"finish_reason": "tool_calls",
++                 "message": {"content": "", "tool_calls": [{"id": "x"}]}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
++        self.assertEqual(self.run_call(policy("chat-completions"), reply), 70)
++        self.assertTrue(self.sent[0][0].endswith("/chat/completions"))
++        self.assertEqual(len(self.ledger()), 1)
++
++    def test_spend_cap_refuses_before_any_request(self):
++        api.STATE.mkdir(parents=True)
++        (api.STATE / "api-spend-test.jsonl").write_text(json.dumps({"cost_usd": 17.995}) + "\n")
++        self.assertEqual(self.run_call(policy(), {}), 79)
++        self.assertEqual(self.sent, [])
++
++    def test_unknown_usage_is_charged_worst_case(self):
++        reply = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
++        self.assertEqual(self.run_call(policy(), reply), 0)
++        self.assertTrue(self.ledger()[0]["estimated"])
++        self.assertGreaterEqual(self.ledger()[0]["cost_usd"], 1000 * 10 / 1e6)
++
++    def test_http_4xx_is_counted_failure_without_charge(self):
++        err = urllib.error.HTTPError("u", 401, "no", {}, io.BytesIO(b'{"error":"bad key"}'))
++        self.assertEqual(self.run_call(policy(), err), 70)
++        self.assertEqual(self.ledger()[0]["cost_usd"], 0.0)
++
++    def test_bad_policy_and_tier_refuse_before_request(self):
++        self.assertEqual(self.run_call(policy(), {}, tier="routine"), 78)
++        bad = policy(); bad["api"]["base_url"] = "http://insecure"
++        self.assertEqual(self.run_call(bad, {}), 78)
++        self.assertEqual(self.sent, [])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index 8a70d96..04479f5 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -8,6 +8,8 @@ trap 'rm -rf "$test_root"' EXIT INT TERM
+ # of the working tree rather than through a bypass.
+ root="$test_root/gateway"; mkdir -p "$root"
+ cp -p "$source_root"/*.sh "$source_root"/*.py "$source_root"/*.json "$source_root"/output-contract.txt "$root"/
++# CLI mocks below exercise the subscription route; the API route has unit tests.
++for p in codex kimi; do jq '.route = "subscription"' "$root/$p-model-policy.json" > "$root/$p.tmp" && mv "$root/$p.tmp" "$root/$p-model-policy.json"; done
+ git -C "$root" init -q && git -C "$root" add -A && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m snapshot
+ mkdir -p "$test_root/.collab" "$test_root/packet" "$test_root/shared" "$test_root/bin"
+ print 'Review prompt.' > "$test_root/prompt.md"

@@ -9,6 +9,30 @@ trap 'rm -rf "$test_root"' EXIT INT TERM
 root="$test_root/gateway"; mkdir -p "$root"
 cp -p "$source_root"/*.sh "$source_root"/*.py "$source_root"/*.json "$source_root"/output-contract.txt "$root"/
 # CLI mocks below exercise the subscription route; the API route has unit tests.
+cat > "$root/api-call.py" <<'PYEOF'
+#!/usr/bin/env python3
+# Stand-in for api-call.py: exercises the wrapper's API branch without a network or key.
+import json, os, sys
+from pathlib import Path
+policy, tier, prompt, out_text, out_meta, marker = sys.argv[1:]
+mode = os.environ.get("API_MOCK_MODE", "ok")
+if mode == "preflight":
+    print("no Keychain item 'svc'", file=sys.stderr); sys.exit(78)
+if mode == "cap":
+    print("API spend cap: refused", file=sys.stderr); sys.exit(79)
+if mode == "crash-before":
+    sys.exit(1)
+Path(marker).touch()
+if mode == "sent-fail":
+    print("API request failed: HTTP 500", file=sys.stderr); sys.exit(70)
+if mode == "crash-after":
+    sys.exit(1)
+body = "The supplied packet is internally consistent and the proposed boundary is testable. " * 8
+body += "\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT"
+Path(out_text).write_text(body)
+Path(out_meta).write_text(json.dumps({"served_model": "mock-served", "input_tokens": 10, "output_tokens": 5,
+                                      "cost_usd": 0.0001, "ledger_committed_usd": 0.0001, "spend_cap_usd": 18.0}))
+PYEOF
 for p in codex kimi; do jq '.route = "subscription"' "$root/$p-model-policy.json" > "$root/$p.tmp" && mv "$root/$p.tmp" "$root/$p-model-policy.json"; done
 git -C "$root" init -q && git -C "$root" add -A && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m snapshot
 mkdir -p "$test_root/.collab" "$test_root/packet" "$test_root/shared" "$test_root/bin"
@@ -639,4 +663,33 @@ for invalid in (
     assert subprocess.run([validator], input=invalid, text=True).returncode != 0
 PY
 
+
+# API route (model policy "route": "api"): shared checks still run, exit codes
+# follow the send marker, and Kimi diagnostics report model_invocation_began truthfully.
+api_repo="$test_root/api"; mkdir -p "$api_repo/.collab"
+for p in codex kimi; do jq '.route = "api" | .api = {style:"chat-completions", base_url:"https://x.test/v1", keychain_service:"svc", ledger:"t", spend_cap_usd:1, tiers:{routine:{model:"m", max_output_tokens:10, usd_per_1m_input:1, usd_per_1m_output:1}}}' "$root/$p-model-policy.json" > "$test_root/$p-api-policy.json"; done
+api_run() { # mode provider output expected-exit
+  local mode="$1" p="$2" out="$3" want="$4" envname
+  envname="${(U)p}_REVIEW_MODEL_POLICY"
+  set +e; env API_MOCK_MODE="$mode" "$envname=$test_root/$p-api-policy.json" "$root/$p-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" "$api_repo/.collab/$out" "$test_root/packet/source.md" >/dev/null 2>"$test_root/api-last.err"; local code=$?; set -e
+  [[ $code -eq $want ]] || { print -u2 "API route $p/$mode: expected $want, got $code: $(<"$test_root/api-last.err")"; exit 1; }
+}
+api_run ok codex codex-api-ok.md 0
+grep -Fx 'Route: api' "$api_repo/.collab/codex-api-ok.md" >/dev/null
+grep -Fx 'Resolved model(s): mock-served' "$api_repo/.collab/codex-api-ok.md" >/dev/null
+shasum -a 256 -c "$api_repo/.collab/codex-api-ok.md.sha256" >/dev/null 2>&1 || (cd "$api_repo/.collab" && shasum -a 256 -c codex-api-ok.md.sha256 >/dev/null)
+api_run preflight kimi kimi-api-pre.md 78
+jq -e '.model_invocation_began == false and .exit_code == 78' "$api_repo/.collab/kimi-api-pre.diagnostic.json" >/dev/null
+api_run cap kimi kimi-api-cap.md 79
+jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-cap.diagnostic.json" >/dev/null
+api_run crash-before kimi kimi-api-crash0.md 78
+jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-crash0.diagnostic.json" >/dev/null
+api_run sent-fail kimi kimi-api-sent.md 70
+jq -e '.model_invocation_began == true and .exit_code == 70' "$api_repo/.collab/kimi-api-sent.diagnostic.json" >/dev/null
+api_run crash-after kimi kimi-api-crash1.md 70
+jq -e '.model_invocation_began == true' "$api_repo/.collab/kimi-api-crash1.diagnostic.json" >/dev/null
+api_run ok codex ../../outside.md 65
+api_run ok kimi kimi-api-self.md 0
+set +e; env API_MOCK_MODE=ok "KIMI_REVIEW_MODEL_POLICY=$test_root/kimi-api-policy.json" "$root/kimi-review.sh" --packet-root "$test_root" --owner claude --author-model kimi-k3 routine "$test_root/prompt.md" "$api_repo/.collab/kimi-api-vendor.md" "$test_root/packet/source.md" >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 64 && ! -e "$api_repo/.collab/kimi-api-vendor.diagnostic.json" ]] || { print -u2 "API route skipped the vendor rule ($code)"; exit 1; }
 print "wrapper failure smoke tests passed"

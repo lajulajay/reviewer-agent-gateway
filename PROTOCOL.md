@@ -31,13 +31,14 @@ registry of agents and the model vendors each one runs.
   may not author reviewed work. Every wrapper and automatic selection refuse
   a reviewer that shares a vendor with any of them, and record the identity
   in the artifact.
-- **Subscription roster.** `reviewer-roster.json` lists the currently active
-  Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
-  or lapses; automatic selection never chooses an inactive reviewer. Gemini is
+- **Reviewer roster.** `reviewer-roster.json` lists the Claude, Codex, and
+  Kimi reviewers currently usable by subscription or API. Update it when
+  access starts or lapses; automatic selection never chooses an inactive reviewer. Gemini is
   deliberately absent because it is fallback-only. Codex and Kimi may run on
   a paid API instead of a subscription (`"route": "api"` in their model
-  policy): keys live in the macOS Keychain, and each call is refused before
-  it is sent if it could push recorded spend past the policy's cap (exit 79).
+  policy): keys live in the macOS Keychain, and each call reserves its bound
+  cost and is refused before sending if spend plus open reservations could
+  pass the policy's cap (exit 79).
   Raising a cap or switching a route is the user's decision.
 - **Ownership changes mid-workstream.** After a handoff, the new owner's
   changes go to another eligible reviewer as usual. For a packet that mixes

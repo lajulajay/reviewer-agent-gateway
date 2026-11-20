@@ -208,28 +208,46 @@ test.
 `codex-model-policy.json` and `kimi-model-policy.json` carry a `route`:
 `subscription` (the CLI paths described above) or `api`. On the API route the
 wrapper keeps every shared check (identity and vendor rule, output naming,
-review budget, packet safety, output contract, checksums) and replaces only
-the model call with `api-call.py`:
+review budget, packet safety, output contract, checksums, gateway provenance)
+and replaces only the model call with `api-call.py`:
 
-- one tool-free request (`/responses` for OpenAI with `tools: []` and
-  `store: false`; `/chat/completions` for Moonshot), and any tool item in the
-  reply fails the review;
-- the key is read from the Keychain item named by `keychain_service`
-  (`reviewer-gateway-openai`, `reviewer-gateway-moonshot`) inside the process
-  and sent only in the Authorization header;
-- before sending, recorded spend plus the worst case (all input at ~3
-  characters per token plus `max_output_tokens`, at the policy's list prices)
-  must fit `spend_cap_usd`, else exit 79; afterwards the actual cost from
-  reported usage (worst case when usage is missing) is appended to
-  `~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl`, outside every
-  repository;
-- the artifact records `Route: api`, the served model, token usage and cost.
+- **One tool-free request** to the policy's https host: OpenAI `/responses`
+  (`tools: []`, `store: false`) or Moonshot `/chat/completions` (`n: 1`).
+  The review is accepted only from a complete reply (`status: completed`, or
+  exactly one choice with `finish_reason: stop`) with no tool item, tool
+  call, or function call; anything else fails with exit 70.
+- **Key handling.** The key is read from the Keychain item named by
+  `keychain_service` inside the process, checked for printable ASCII without
+  being echoed, and sent only in the Authorization header. Redirects are
+  refused and a reply from another host is rejected. Every message the script
+  prints is redacted, and unexpected exceptions print no traceback.
+- **Spend cap.** Under an exclusive lock on the ledger, the call reserves its
+  bound before sending: every UTF-8 byte of the request body counted as one
+  input token (tokenizers emit at most one token per byte) plus 1,024 framing
+  tokens and `max_output_tokens`, at the policy's list prices, rounded up to
+  the micro-dollar. It is refused (exit 79) unless settled spend plus open
+  reservations plus that bound fit `spend_cap_usd`. The reservation is then
+  settled at the reported usage. It is released to zero only for HTTP 400,
+  401, 403, 404 and 422 (the provider rejected the request); missing usage,
+  429, 5xx, transport errors, malformed replies and crashes keep the full
+  reservation. The ledger is
+  `~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl` (fixed location,
+  outside every repository; a malformed line refuses all calls rather than
+  guessing). Output ceilings include reasoning tokens on both APIs as
+  documented by the providers; confirm when changing models.
+- **Exit codes.** `api-call.py` creates a marker immediately before sending.
+  Without the marker, the wrapper exits 64, 78 or 79 (nothing was sent; the
+  dispatcher may fail over). With it, any failure is 70 (the request may have
+  reached the model and counts), and Kimi's diagnostic sets
+  `model_invocation_began` from the same marker.
+- The artifact records `Route: api`, the served model, token usage and cost.
 
-Store a key without exposing it in shell history:
-`read -rs "k?key: " && security add-generic-password -U -a "$USER" -s <service> -w "$k"; unset k`
-(the Keychain's own prompt truncates input at 128 characters, which breaks
-OpenAI project keys). Exit 78 means a missing key or policy before any
-request; 70 means the request was sent and failed.
+Store or replace a key with `python3 keychain-store.py <service>`
+(`reviewer-gateway-openai`, `reviewer-gateway-moonshot`). It prompts with
+echo off and writes through the Security framework, so the key never appears
+in argv, the environment or shell history. (`security add-generic-password
+-w` truncates typed input at 128 characters, and passing the key as its
+argument exposes it in the process list.)
 
 ## Gemini reviews through Antigravity CLI
 

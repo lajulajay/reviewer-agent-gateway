@@ -48,6 +48,7 @@ are in the proposal. No production service is changed.
 
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
+| r01 | Codex API (`gpt-6.1-sol`) | hard; first review of the spend-capped API route, which handles keys and money | `.collab/codex-2026-11-20-api-route-r01.md` (SHA-256 `cd7f8ffcfa4b0777932fa480de1f66e9fc97d808b7ed3fa84c8168e720348241`) | REJECT |
 | r02 | Gemini (`gemini-3.8-flash-high`) | hard; changes who may review whom in every repository | `.collab/gemini-2026-11-20-copilot-owner-phase1-r02.json` (SHA-256 `99fec6f5c65f9d9c90020c7a80c2573439345f22930beb35dc125ab18a612fe7`) | ACCEPT WITH CONDITIONS |
 
 r01 (`.collab/gemini-2026-11-20-copilot-owner-phase1-r01.diagnostic.json`) was
@@ -58,6 +59,18 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
+| R01-F1 | blocker | | open: redirects refused (`_NoRedirect`), reply host checked; tests added; awaiting r02 |
+| R01-F2 | major | | open: `keychain-store.py` stores via the Security framework (no argv/env); README updated; awaiting r02 |
+| R01-F3 | major | | open: all output redacted, key validated without echo, no tracebacks; tests added; awaiting r02 |
+| R01-F4 | blocker | | open: bound = every UTF-8 body byte + 1,024 framing tokens; test added; awaiting r02 |
+| R01-F5 | blocker | | open: locked, fsynced reserve-then-settle ledger; crash keeps reservation; concurrency test; awaiting r02 |
+| R01-F6 | blocker | | open: failures and missing usage keep the full reservation; only 400/401/403/404/422 release; awaiting r02 |
+| R01-F7 | major | | open: finite positive numbers, integer micro-dollars rounded up, malformed ledger refuses, fixed ledger location; awaiting r02 |
+| R01-F8 | major | | open: send marker drives exit codes and Kimi `model_invocation_began`; post-send steps fail 70; smoke cases; awaiting r02 |
+| R01-F9 | major | | open: complete-reply checks, exactly one choice, `function_call` and tool finish reasons rejected; awaiting r02 |
+| R01-F10 | major | | open: 16 unit tests and API-branch smoke cases (which also caught a `$0`-in-function path bug); awaiting r02 |
+| R01-F11 | minor | | open: README and PROTOCOL rewritten to match; roster wording covers API reviewers; awaiting r02 |
+| R01-C1 | condition | | open: model, price and reasoning-token semantics need sponsor confirmation from first-party pages |
 | R02-F1 | minor | fixed 605cdc0 | proposal moves task-table checks to Phase 3 with the template; pending push |
 | R02-F2 | minor | fixed 605cdc0 | PROTOCOL synopses list `--author` and `--task`; pending push |
 | R02-C1 | condition | | open: fixed in 605cdc0; no Gemini quota for a check round, awaiting sponsor acceptance |
@@ -81,3 +94,7 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
 - 2026-11-20: Gemini r02 ACCEPT WITH CONDITIONS (two minor findings, one
   condition); fixes committed as 605cdc0 on `copilot-owner-phase1`. Merge to
   `main` and push await the sponsor.
+- 2026-11-20: API route committed (d96f496); Codex API r01 REJECT with five
+  blockers on key confinement and spend accounting. All addressed in the next
+  commit; ledgers migrated to the reserve/settle format (pre-migration copies
+  kept beside them). Follow-up r02 to verify.

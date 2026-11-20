@@ -46,7 +46,7 @@ fi
 # and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
 provider=kimi; policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
 route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read kimi-model-policy.json"
-if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Kimi "$@"; fi
+if [[ "$route" == api ]]; then gateway_dir="${0:A:h}"; source "$gateway_dir/api-route.sh"; api_route Kimi "$@"; fi
 [[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
 command -v kimi >/dev/null || fail 69 "Kimi Code CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
 policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"

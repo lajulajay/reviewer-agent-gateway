@@ -38,7 +38,7 @@ fi
 # and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
 provider=codex; policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
 route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read codex-model-policy.json"
-if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Codex "$@"; fi
+if [[ "$route" == api ]]; then gateway_dir="${0:A:h}"; source "$gateway_dir/api-route.sh"; api_route Codex "$@"; fi
 [[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
 command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
 # Reviews run on the ChatGPT plan. An API key would switch Codex to billed
