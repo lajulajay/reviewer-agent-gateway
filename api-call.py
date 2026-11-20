@@ -32,6 +32,7 @@ failed.
 """
 
 import fcntl
+import re
 import json
 import math
 import os
@@ -142,16 +143,15 @@ def _fsync_dir(path):
 
 
 def reserve(cfg, tier, bound):
-    created_dir = not STATE.exists()
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if created_dir:
-        _fsync_dir(STATE.parent)
-    created_file = not ledger_path(cfg).exists()
     call_id = uuid.uuid4().hex
     with ledger_path(cfg).open("a+") as fh:
-        if created_file:
-            _fsync_dir(STATE)
         fcntl.flock(fh, fcntl.LOCK_EX)
+        # Under the lock, before any reservation is trusted or sent: make the
+        # directory entries durable every time, so a crash or restart between
+        # creation and use can never drop the ledger's pathname.
+        _fsync_dir(STATE.parent)
+        _fsync_dir(STATE)
         fh.seek(0)
         already = committed(fh.read().splitlines())
         if already + bound > cfg["cap_micro"]:
@@ -265,7 +265,10 @@ def run(argv):
         try:
             err = json.loads(exc.read()[:4000]).get("error")
             if isinstance(err, dict):
-                parts = [str(err.get(k))[:40] for k in ("type", "code") if isinstance(err.get(k), (str, int))]
+                # Only short identifier-shaped codes are reported; anything else is server text and dropped.
+                parts = [str(err.get(k)) for k in ("type", "code")
+                         if isinstance(err.get(k), (str, int)) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(err.get(k)))
+                         and redact(str(err.get(k))) == str(err.get(k))]
                 detail = " (" + ", ".join(parts) + ")" if parts else ""
         except Exception:
             pass  # the body is never echoed: it is untrusted and may quote the request
@@ -276,6 +279,13 @@ def run(argv):
     reply, problem, tin, tout, served = parse(cfg, data)
     if not problem and not reply.strip():
         problem = "no text in reply"
+    if not problem:
+        # The gateway's substance check runs before settling, so a reply it
+        # rejects keeps the full bound like any other rejected reply.
+        check = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "reviewer-validate.py")],
+                               input=reply, capture_output=True, text=True)
+        if check.returncode != 0:
+            problem = "substance validation failed"
     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
     if problem:
         cost, note = bound, f"reply rejected ({problem}): full bound kept"

@@ -1,0 +1,259 @@
+diff --git a/api-call.py b/api-call.py
+index 6d6703e..379e377 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -62,7 +62,8 @@ def redact(text):
+     text = str(text)
+     for s in _SECRET:
+         if s:
+-            text = text.replace(s, "[REDACTED]")
++            for form in (s, json.dumps(s)[1:-1]):
++                text = text.replace(form, "[REDACTED]")
+     return text
+ 
+ 
+@@ -116,8 +117,8 @@ def committed(lines):
+             continue
+         try:
+             e = json.loads(line)
+-            amount = int(e["micro_usd"])
+-            if amount < 0 or e["kind"] not in ("reserve", "settle"):
++            amount = e["micro_usd"]
++            if type(amount) is not int or amount < 0 or e["kind"] not in ("reserve", "settle"):
+                 raise ValueError
+             (reserved if e["kind"] == "reserve" else settled)[e["id"]] = amount
+         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+@@ -132,10 +133,24 @@ def append(fh, entry):
+     os.fsync(fh.fileno())
+ 
+ 
++def _fsync_dir(path):
++    fd = os.open(path, os.O_RDONLY)
++    try:
++        os.fsync(fd)
++    finally:
++        os.close(fd)
++
++
+ def reserve(cfg, tier, bound):
++    created_dir = not STATE.exists()
+     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
++    if created_dir:
++        _fsync_dir(STATE.parent)
++    created_file = not ledger_path(cfg).exists()
+     call_id = uuid.uuid4().hex
+     with ledger_path(cfg).open("a+") as fh:
++        if created_file:
++            _fsync_dir(STATE)
+         fcntl.flock(fh, fcntl.LOCK_EX)
+         fh.seek(0)
+         already = committed(fh.read().splitlines())
+@@ -206,7 +221,7 @@ def parse(cfg, data):
+         problem = f"{len(choices)} choices returned; exactly one is required"
+     for ch in choices:
+         msg = ch.get("message") or {}
+-        has_tool = bool(msg.get("tool_calls")) or msg.get("function_call") is not None \
++        has_tool = bool(msg.get("tool_calls")) or "function_call" in msg \
+             or ch.get("finish_reason") in ("tool_calls", "function_call")
+         if has_tool:
+             problem = "tool call in reply"
+@@ -246,29 +261,38 @@ def run(argv):
+     except urllib.error.HTTPError as exc:
+         released = exc.code in UNBILLED_HTTP
+         settle(cfg, call_id, 0 if released else bound, f"HTTP {exc.code}")
++        detail = ""
+         try:
+-            detail = exc.read()[:300].decode(errors="replace")
++            err = json.loads(exc.read()[:4000]).get("error")
++            if isinstance(err, dict):
++                parts = [str(err.get(k))[:40] for k in ("type", "code") if isinstance(err.get(k), (str, int))]
++                detail = " (" + ", ".join(parts) + ")" if parts else ""
+         except Exception:
+-            detail = "(unreadable body)"
+-        raise Refusal(70, f"API request failed: HTTP {exc.code}: {detail}"
++            pass  # the body is never echoed: it is untrusted and may quote the request
++        raise Refusal(70, f"API request failed: HTTP {exc.code}{detail}"
+                           + ("" if released else "; full reservation kept"))
+     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+         raise Refusal(70, f"API request failed ({type(exc).__name__}); full reservation kept")
+     reply, problem, tin, tout, served = parse(cfg, data)
+-    usage_ok = all(isinstance(v, int) and v >= 0 for v in (tin, tout))
+-    cost = micro(tin, tout, cfg) if usage_ok else bound
+-    settle(cfg, call_id, cost, "usage" if usage_ok else "usage missing: charged the full bound")
++    if not problem and not reply.strip():
++        problem = "no text in reply"
++    usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
++    if problem:
++        cost, note = bound, f"reply rejected ({problem}): full bound kept"
++    elif usage_ok:
++        cost, note = micro(tin, tout, cfg), "usage"
++    else:
++        cost, note = bound, "usage missing: charged the full bound"
++    settle(cfg, call_id, cost, note)
+     meta = {"route": "api", "endpoint": url, "selected_model": cfg["model"], "served_model": served,
+             "reasoning_effort": cfg["effort"], "input_tokens": tin, "output_tokens": tout,
+             "cost_usd": cost / MICRO, "ledger_committed_usd": (already + cost) / MICRO,
+             "spend_cap_usd": cfg["cap_micro"] / MICRO, "problem": problem,
+             "elapsed_seconds": round(time.time() - start, 1)}
+-    Path(out_meta).write_text(json.dumps(meta))
++    Path(out_meta).write_text(redact(json.dumps(meta)))
+     if problem:
+         raise Refusal(70, f"API reply rejected: {problem}")
+-    if not reply.strip():
+-        raise Refusal(70, "API returned no text")
+-    Path(out_text).write_text(reply)
++    Path(out_text).write_text(redact(reply))
+     return 0
+ 
+ 
+diff --git a/api-route.sh b/api-route.sh
+index e8743de..af02ab3 100644
+--- a/api-route.sh
++++ b/api-route.sh
+@@ -12,11 +12,18 @@ api_route() {
+   local budget_tier="$requested_model"
+   [[ "$requested_model" == hard ]] || budget_tier=routine
+   budget="$(python3 "$gateway_dir/review-budget.py" "$provider" "$budget_tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+-  { cat "$prompt"; for f in "$@"; do safe "$f" packet; printf '\n\n===== %s =====\n' "$(basename "$REPLY")"; cat "$REPLY"; done
+-    print -r -- "
++  # Each assembly step is checked: an incomplete packet must never be sent.
++  cat "$prompt" > "$combined" || fail 78 "cannot assemble the review prompt"
++  for f in "$@"; do
++    safe "$f" packet
++    printf '\n\n===== %s =====\n' "$(basename "$REPLY")" >> "$combined" || fail 78 "cannot assemble the review prompt"
++    cat "$REPLY" >> "$combined" || fail 78 "cannot read packet $REPLY"
++  done
++  print -r -- "
+ 
+ TOOLS: None are available. Review only the text above.
+-"; cat "$gateway_dir/output-contract.txt"; } > "$combined" || fail 78 "cannot assemble the review prompt"
++" >> "$combined" || fail 78 "cannot assemble the review prompt"
++  cat "$gateway_dir/output-contract.txt" >> "$combined" || fail 78 "cannot read the output contract"
+   # api-call.py creates the marker immediately before sending; only then may
+   # the model have been reached (Kimi diagnostics report this truthfully).
+   local marker="$tmp/api.sent" code
+@@ -26,19 +33,23 @@ TOOLS: None are available. Review only the text above.
+   set -e
+   if [[ -e "$marker" ]]; then model_invocation_started=1; fi
+   if [[ ! -e "$marker" ]]; then
+-    case $code in 64|78|79) fail $code "$(tail -1 "$stderr")" ;; 0) fail 70 "API call reported success without sending" ;; *) fail 78 "$title API preflight failed (exit $code): $(tail -1 "$stderr")" ;; esac
++    case $code in 64|78|79) fail $code "$(tail -1 "$stderr")" ;; 0) fail 78 "API call exited 0 without sending" ;; *) fail 78 "$title API preflight failed (exit $code): $(tail -1 "$stderr")" ;; esac
+   fi
+   [[ $code -eq 0 ]] || fail 70 "$title API call failed: $(tail -1 "$stderr")"
+   python3 "$gateway_dir/reviewer-validate.py" < "$last" || fail 70 "$title response failed substance validation"
+   local checks
+   checks="$(python3 "$gateway_dir/reviewer-claims.py" < "$last")" || fail 70 "$title mechanical checks failed"
++  # Every value is computed and checked before the artifact is written.
++  local served usage cost
++  served="$(jq -r '.served_model // "not reported"' "$tmp/api.json")" || fail 70 "cannot read API metadata"
++  usage="$(jq -c '{input_tokens, output_tokens}' "$tmp/api.json")" || fail 70 "cannot read API metadata"
++  cost="$(jq -r '"$\(.cost_usd) (ledger committed $\(.ledger_committed_usd) of $\(.spend_cap_usd) cap)"' "$tmp/api.json")" || fail 70 "cannot read API metadata"
+   { print "# $title review"; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"
+     print "Wrapper revision: $wrapper_rev"; print "Route: api"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"
+-    print "Resolved model(s): $(jq -r '.served_model // "not reported"' "$tmp/api.json")"
+-    print "Usage: $(jq -c '{input_tokens, output_tokens}' "$tmp/api.json")"
+-    print "API cost: $(jq -r '"$\(.cost_usd) (ledger committed $\(.ledger_committed_usd) of $\(.spend_cap_usd) cap)"' "$tmp/api.json")"
++    print "Resolved model(s): $served"; print "Usage: $usage"; print "API cost: $cost"
+     [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"
+-    while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md" || fail 70 "cannot write the $title artifact"
++    while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; } > "$tmp/final.md" || fail 70 "cannot write the $title artifact"
++  cat "$last" >> "$tmp/final.md" || fail 70 "cannot write the $title artifact"
+   { chmod 444 "$tmp/final.md" && mv "$tmp/final.md" "$output" && shasum -a 256 "$output" > "$output.sha256" && chmod 444 "$output.sha256"; } || fail 70 "cannot store the $title artifact or checksum"
+   [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "$title artifact or checksum was not created"
+   print "captured $output"
+diff --git a/keychain-store.py b/keychain-store.py
+index 4291da1..73b2502 100644
+--- a/keychain-store.py
++++ b/keychain-store.py
+@@ -16,6 +16,7 @@ import getpass
+ import os
+ import subprocess
+ import sys
++import warnings
+ 
+ ERR_DUPLICATE = -25299
+ 
+@@ -25,7 +26,16 @@ def main(argv):
+         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
+         return 64
+     service, account = argv[1].encode(), os.environ.get("USER", "").encode()
+-    secret = getpass.getpass(f"Key for {argv[1]} (input hidden): ").strip().encode()
++    if not sys.stdin.isatty():
++        print("run this in an interactive terminal so the key is read with echo off", file=sys.stderr)
++        return 65
++    with warnings.catch_warnings():
++        warnings.simplefilter("error", getpass.GetPassWarning)  # never fall back to echoed input
++        try:
++            secret = getpass.getpass(f"Key for {argv[1]} (input hidden): ").strip().encode()
++        except getpass.GetPassWarning:
++            print("cannot turn off terminal echo; refusing to read the key", file=sys.stderr)
++            return 65
+     if not secret or not all(33 <= b < 127 for b in secret):
+         print("refusing an empty key or one with spaces or non-ASCII characters", file=sys.stderr)
+         return 65
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index ca56f4e..beff1c1 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -137,7 +137,11 @@ class ApiCallTest(unittest.TestCase):
+         err = urllib.error.HTTPError("u", 401, "no", {}, body)
+         self.assertEqual(self.call(policy(), err), 70)
+         self.assertNotIn(SECRET, self.err)
+-        self.assertIn("[REDACTED]", self.err)
++        self.assertNotIn("bad key", self.err)  # untrusted error bodies are never echoed
++
++    def test_json_escaped_secret_is_redacted(self):
++        api._SECRET[:] = ['sk-a"b']
++        self.assertEqual(api.redact('{"k": "sk-a\\"b"}'), '{"k": "[REDACTED]"}')
+ 
+     def test_malformed_key_refused_before_send_without_echo(self):
+         bad = "sk-bad\nkey"
+@@ -218,6 +222,8 @@ class ApiCallTest(unittest.TestCase):
+                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
+             ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "function_call": {}}}],
+                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
++            ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "function_call": None}}],
++                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
+             ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "tool_calls": [], "function_call": {}}}],
+                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
+             ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "a"}},
+@@ -229,6 +235,17 @@ class ApiCallTest(unittest.TestCase):
+                 self.assertEqual(self.call(policy(style), reply), 70)
+                 self.assertFalse((self.base / "out.md").exists())
+ 
++    def test_rejected_reply_keeps_full_bound_even_with_zero_usage(self):
++        self.assertEqual(self.call(policy(), openai_reply(text="", usage=(0, 0))), 70)
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_fractional_ledger_amount_refuses(self):
++        api.STATE.mkdir(parents=True)
++        for amount in (-0.5, 1.5, True, "3"):
++            (api.STATE / "api-spend-test.jsonl").write_text(json.dumps({"kind": "settle", "id": "a", "micro_usd": amount}) + "\n")
++            self.assertEqual(self.call(policy(), openai_reply()), 78)
++        self.assertEqual(self.sent, [])
++
+     def test_unknown_tier_refuses_before_send(self):
+         self.assertEqual(self.call(policy(), openai_reply(), tier="routine"), 78)
+         self.assertFalse(self.marker.exists())
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index bbfd66a..4f0da27 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -22,6 +22,8 @@ if mode == "cap":
+     print("API spend cap: refused", file=sys.stderr); sys.exit(79)
+ if mode == "crash-before":
+     sys.exit(1)
++if mode == "zero-nomarker":
++    sys.exit(0)
+ Path(marker).touch()
+ if mode == "sent-fail":
+     print("API request failed: HTTP 500", file=sys.stderr); sys.exit(70)
+@@ -684,6 +686,8 @@ api_run cap kimi kimi-api-cap.md 79
+ jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-cap.diagnostic.json" >/dev/null
+ api_run crash-before kimi kimi-api-crash0.md 78
+ jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-crash0.diagnostic.json" >/dev/null
++api_run zero-nomarker kimi kimi-api-zero.md 78
++jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-zero.diagnostic.json" >/dev/null
+ api_run sent-fail kimi kimi-api-sent.md 70
+ jq -e '.model_invocation_began == true and .exit_code == 70' "$api_repo/.collab/kimi-api-sent.diagnostic.json" >/dev/null
+ api_run crash-after kimi kimi-api-crash1.md 70

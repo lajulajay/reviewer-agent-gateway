@@ -40,7 +40,10 @@ def policy(style="openai-responses", cap=18.0, **tier):
                     "ledger": "test", "spend_cap_usd": cap, "tiers": {"hard": t}}}
 
 
-def openai_reply(text="VERDICT: ACCEPT", status="completed", usage=(1000, 500), extra=()):
+GOOD = ("The packet is internally consistent and the proposed boundary is testable. " * 8 + "\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT")
+
+
+def openai_reply(text=GOOD, status="completed", usage=(1000, 500), extra=()):
     out = [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": text}]}, *extra]
     r = {"model": "gpt-6.1-sol", "status": status, "output": out}
     if usage:
@@ -113,7 +116,7 @@ class ApiCallTest(unittest.TestCase):
         self.assertTrue(self.marker.exists())
 
     def test_chat_request_asks_for_one_choice(self):
-        reply = {"model": "k", "choices": [{"finish_reason": "stop", "message": {"content": "VERDICT: ACCEPT"}}],
+        reply = {"model": "k", "choices": [{"finish_reason": "stop", "message": {"content": GOOD}}],
                  "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
         self.assertEqual(self.call(policy("chat-completions"), reply), 0)
         self.assertTrue(self.sent[0][0].endswith("/chat/completions"))
@@ -234,6 +237,16 @@ class ApiCallTest(unittest.TestCase):
             with self.subTest(style=style, reply=str(reply)[:60]):
                 self.assertEqual(self.call(policy(style), reply), 70)
                 self.assertFalse((self.base / "out.md").exists())
+
+    def test_substance_rejected_reply_keeps_full_bound(self):
+        self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
+        self.assertEqual(self.committed(), self.bound())
+
+    def test_error_codes_reported_only_when_identifier_shaped(self):
+        body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
+        self.assertEqual(self.call(policy(), urllib.error.HTTPError("u", 400, "x", {}, body)), 70)
+        self.assertIn("invalid_request_error", self.err)
+        self.assertNotIn("leaked prompt", self.err)
 
     def test_rejected_reply_keeps_full_bound_even_with_zero_usage(self):
         self.assertEqual(self.call(policy(), openai_reply(text="", usage=(0, 0))), 70)
