@@ -198,12 +198,14 @@ of the batch.
 
 1. Registry (D1) with Kimi and Codex inactive; `--owner copilot`, `--task`,
    `--author-model` in the wrappers and selection (D2); vendor rule in
-   selection and every wrapper (D3); `docs-check.py` checks (D10); tests.
-   Reviewed by Gemini (hard).
+   selection and every wrapper (D3); `docs-check.py` checks of `Owner:` lines
+   and artifact independence (D10, first half); tests. Reviewed by Gemini
+   (hard).
 2. `copilot-review.sh` and its model policy (D4), after a sponsor decision on
    the tier × vendor mapping and a live read-only smoke test; tickets (D5);
    budget pool and batching (D6).
-3. Integration gate (D7), boundary (D8), templates (D9); repository shims and
+3. Integration gate (D7), boundary (D8), templates (D9) with the task table
+   and its `docs-check.py` checks (D10, second half); repository shims and
    `Standards:` pins bumped; `AGENTS.md` exceptions replaced.
 
 Each phase is committed only with the sponsor's approval.
