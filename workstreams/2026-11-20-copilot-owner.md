@@ -26,6 +26,13 @@ are in the proposal. No production service is changed.
   different model versions", corrected by the sponsor to "not reviewing
   itself even if it's different model versions". Supersedes: Gemini as default reviewer of
   Copilot work (based on an assumption the sponsor withdrew).
+- 2026-11-20, user, scope: commit Phase 1. Quote: "yes commit phase 1".
+  Committed as 9fff067 on branch `copilot-owner-phase1`; merge to `main`
+  still needs the sponsor's approval.
+- 2026-11-20, user, scope: Phase 1 Gemini review r02 only; run with
+  `GEMINI_REVIEW_MIN_QUOTA=0.03` instead of the 0.15 floor (r01 was refused
+  at 0.0799 remaining). Quote: "use the lowered Gemini floor". Accepted risk:
+  if the quota runs out during the call, Antigravity may spend AI credits.
 - 2026-11-20, user, scope: Copilot running reviewer wrappers. Quote: "if you
   mean am i ok with it, yes".
 
@@ -33,11 +40,19 @@ are in the proposal. No production service is changed.
 
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
+| r02 | Gemini (`gemini-3.8-flash-high`) | hard; changes who may review whom in every repository | `.collab/gemini-2026-11-20-copilot-owner-phase1-r02.json` (SHA-256 `99fec6f5c65f9d9c90020c7a80c2573439345f22930beb35dc125ab18a612fe7`) | ACCEPT WITH CONDITIONS |
+
+r01 (`.collab/gemini-2026-11-20-copilot-owner-phase1-r01.diagnostic.json`) was
+refused at the quota floor before any model call; not a review. r02 ran under
+the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
+| R02-F1 | minor | fixed 605cdc0 | proposal moves task-table checks to Phase 3 with the template; pending push |
+| R02-F2 | minor | fixed 605cdc0 | PROTOCOL synopses list `--author` and `--task`; pending push |
+| R02-C1 | condition | | open: fixed in 605cdc0; no Gemini quota for a check round, awaiting sponsor acceptance |
 
 ## Log
 
@@ -55,3 +70,6 @@ are in the proposal. No production service is changed.
   `1c6b49372c37caa1328f7d46e50ec79a65ea578b` at 17:07 ET; the gateway is clean.
   Lesson: develop gateway changes in a separate worktree, never the live
   checkout.
+- 2026-11-20: Gemini r02 ACCEPT WITH CONDITIONS (two minor findings, one
+  condition); fixes committed as 605cdc0 on `copilot-owner-phase1`. Merge to
+  `main` and push await the sponsor.

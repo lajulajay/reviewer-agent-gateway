@@ -1,0 +1,857 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index 819921d..4b0b012 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -9,26 +9,28 @@ rules. If repository wording differs from this file, this file wins.
+ 
+ | Role | Who | Does |
+ | :--- | :--- | :--- |
+-| Owner | Codex **or** Claude, assigned by the user per workstream | Investigates, implements, tests, and commits/pushes/deploys within the user's escalation boundary |
++| Owner | Claude, Codex, or Copilot, assigned by the user per workstream | Investigates, implements, tests, and commits/pushes/deploys within the user's escalation boundary |
+ | Official reviewers | Active Kimi, Claude, and Codex reviewers other than the owner | Read-only adversarial review of substantive work |
+ | Fallback reviewer | Gemini, always | Read-only review when no eligible subscription reviewer is available or a decision-material disagreement remains unresolved |
+ 
+-Codex and Claude are interchangeable owners; neither is the default. Kimi and
+-Gemini are reviewer-only and never own work.
++Claude, Codex, and Copilot are interchangeable owners; none is the default.
++Kimi and Gemini are reviewer-only and never own work. `agents.json` is the
++registry of agents and the model vendors each one runs.
+ 
+ - **Recording the owner.** Each workstream file in the repository's
+-  `workstreams/` starts with an `Owner: Codex` or `Owner: Claude` line
++  `workstreams/` starts with an `Owner: <agent>` line
+   (legacy `COLLAB.md` entries before adoption kept theirs). Only the
+   user assigns or changes the owner. A change is recorded as a new dated line,
+   e.g. `Owner: Claude (from Codex, 2026-10-03, Codex limit reached)`; earlier
+   entries are never rewritten.
+-- **No self-review.** A change is reviewed only by an agent that did not
+-  author it. Pass `--owner codex|claude` on every reviewer call: automatic
+-  selection excludes the owner; for mixed-authorship packets, pass one
+-  `--author codex|claude|kimi` per additional author so automatic selection
+-  excludes them too. The Claude wrapper refuses `--owner claude`,
+-  the Codex wrapper refuses `--owner codex`, and every wrapper records the
+-  owner in its artifact.
++- **No self-review, by vendor.** No model vendor reviews work it owns or
++  wrote, whatever the model version (user decision 2026-11-20). Pass
++  `--owner` on every reviewer call, one `--author` per additional agent, and
++  one `--author-model` per model that wrote the work; Copilot ownership or
++  authorship requires `--author-model`, and a router such as Copilot Fusion
++  may not author reviewed work. Every wrapper and automatic selection refuse
++  a reviewer that shares a vendor with any of them, and record the identity
++  in the artifact.
+ - **Subscription roster.** `reviewer-roster.json` lists the currently active
+   Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
+   or lapses; automatic selection never chooses an inactive reviewer. Gemini is
+@@ -63,17 +65,17 @@ Run from the repository root through the repository's `reviewers/` shims,
+ which delegate to this gateway:
+ 
+ ```bash
+-reviewers/claude-review.sh --owner codex  <sonnet|opus>    <prompt> .collab/claude-YYYY-MM-DD-topic.md <packet>...
+-reviewers/codex-review.sh  --owner claude <routine|hard>   <prompt> .collab/codex-YYYY-MM-DD-topic.md  <packet>...
+-reviewers/kimi-review.sh   --owner <codex|claude> <hard|routine> <prompt> .collab/kimi-YYYY-MM-DD-topic.md <packet>...
+-reviewers/auto-review.sh   --owner <codex|claude> <hard|routine> <prompt> .collab/auto-YYYY-MM-DD-topic.md <packet>...
+-reviewers/gemini-review.sh --owner <codex|claude> <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
++reviewers/claude-review.sh --owner <agent> [--author-model M]... <sonnet|opus>    <prompt> .collab/claude-YYYY-MM-DD-topic.md <packet>...
++reviewers/codex-review.sh  --owner <agent> [--author-model M]... <routine|hard>   <prompt> .collab/codex-YYYY-MM-DD-topic.md  <packet>...
++reviewers/kimi-review.sh   --owner <agent> [--author-model M]... <hard|routine> <prompt> .collab/kimi-YYYY-MM-DD-topic.md <packet>...
++reviewers/auto-review.sh   --owner <agent> [--author-model M]... <hard|routine> <prompt> .collab/auto-YYYY-MM-DD-topic.md <packet>...
++reviewers/gemini-review.sh --owner <agent> [--author-model M]... <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
+ ```
+ 
+ Add `--packet-root <dir>` to use a shared prompt or packet from outside the
+ repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
+ before the model or tier. For automatic selection of mixed-authorship work,
+-repeat `--author <codex|claude|kimi>` for every author besides the owner.
++repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
+ 
+ For automatic selection, the `auto-` output name is a template; the artifact
+ uses the chosen provider's prefix. New topics go to the active, non-owner
+diff --git a/README.md b/README.md
+index 79ddd41..a806363 100644
+--- a/README.md
++++ b/README.md
+@@ -13,8 +13,8 @@ or direct Moonshot API configuration.
+ Invocation contract:
+ 
+ ```text
+-reviewer.sh [--packet-root DIR] [--owner codex|claude] MODEL PROMPT OUTPUT PACKET...
+-auto-review.sh [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> PROMPT AUTO_OUTPUT PACKET...
++reviewer.sh [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] MODEL PROMPT OUTPUT PACKET...
++auto-review.sh [--packet-root DIR] --owner AGENT [--author AGENT]... [--author-model MODEL]... [--task ID] <hard|routine> PROMPT AUTO_OUTPUT PACKET...
+ ```
+ 
+ The target repository is derived from the output path. Inputs outside it are
+@@ -28,19 +28,28 @@ review prose. Failed calls write a
+ non-overwritable `.diagnostic.json` beside the requested output whenever the
+ output location is usable.
+ 
+-`--owner` names the agent that owns the work under review. It is optional for
+-compatibility on direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires
+-it: the Claude wrapper refuses `--owner claude`, the Codex wrapper refuses
+-`--owner codex`, and every wrapper records the owner in its artifact or
+-diagnostic. Automatic selection requires `--owner` and excludes that reviewer.
+-For a packet with additional authors, repeat `--author` for each of them;
+-automatic selection excludes every named author. Do not use automatic selection
+-for mixed-authorship work unless all authors are named.
+-
+-Active roles: Codex and Claude interchangeably own work; Kimi is reviewer-only.
++`--owner` names the agent that owns the work under review (an owner in
++`agents.json`: Claude, Codex, or Copilot). It is optional for compatibility on
++direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires it. Repeat
++`--author` for each additional authoring agent and `--author-model` for each
++model that wrote the work; `--task` records a delegated task ID. Every wrapper
++records these in its artifact and runs `agents.py check` before any model call.
++
++Vendor independence: `agents.json` maps each channel (CLI subscription) to the
++model vendors it runs, and model IDs to vendors by prefix. A reviewer is
++refused (exit 64) when any of its vendors is the vendor of the owner, an author,
++or an authoring model, whatever the model version: Gemini cannot review work
++written by Gemini 4 Hydrogen through Copilot; Claude cannot review Copilot work
++written by any Claude model. Copilot's vendor depends on the model, so Copilot
++ownership or authorship requires `--author-model`; routers (`auto`, Copilot
++Fusion) and unknown prefixes fail closed. Automatic selection applies the same
++rule. `docs-check.py record` re-checks every indexed artifact and every
++workstream `Owner:` line against the registry.
++
++Active roles: Claude, Codex, and Copilot own work; Kimi is reviewer-only.
+ Kimi, Claude, and Codex are official reviewers when active in
+ `reviewer-roster.json`, and Gemini is always the fallback reviewer, never an
+-owner. Remove a reviewer from `active_reviewers` when its subscription lapses
++owner. Copilot is not yet a reviewer channel. Remove a reviewer from `active_reviewers` when its subscription lapses
+ and restore it when renewed; `tie_break_order` must continue to list all three
+ subscription reviewers.
+ 
+diff --git a/agents.json b/agents.json
+new file mode 100644
+index 0000000..7cbb2a0
+--- /dev/null
++++ b/agents.json
+@@ -0,0 +1,18 @@
++{
++  "channels": {
++    "claude":  {"vendors": ["anthropic"], "can_own": true,  "can_review": true},
++    "codex":   {"vendors": ["openai"],    "can_own": true,  "can_review": true},
++    "copilot": {"vendors": "by-model",    "can_own": true,  "can_review": false},
++    "kimi":    {"vendors": ["moonshot"],  "can_own": false, "can_review": true},
++    "gemini":  {"vendors": ["google"],    "can_own": false, "can_review": true}
++  },
++  "vendor_prefixes": {
++    "anthropic": ["claude-"],
++    "openai": ["gpt-", "codex-", "o1", "o3", "o4"],
++    "google": ["gemini-"],
++    "microsoft": ["mai-"],
++    "xai": ["grok-"],
++    "moonshot": ["kimi-"]
++  },
++  "unresolvable_models": ["auto", "copilot-fusion", "fusion"]
++}
+diff --git a/agents.py b/agents.py
+new file mode 100644
+index 0000000..ad03c8a
+--- /dev/null
++++ b/agents.py
+@@ -0,0 +1,133 @@
++#!/usr/bin/env python3
++"""Agent registry and the vendor-independence rule.
++
++  agents.py check REVIEWER [--owner O] [--author A]... [--author-model M]...
++
++A reviewer may review work only if none of its model vendors is the vendor of
++the owner, of an additional author, or of any model that wrote the work. Model
++versions do not matter: any Gemini model is Google, any Claude model is
++Anthropic. Channels whose vendor depends on the model (Copilot) require every
++authoring model to be named; routers such as Copilot Fusion are refused
++because their vendor cannot be known.
++
++Exit 0 when eligible, 64 on a rule or usage violation, 78 when the registry
++cannot be read.
++"""
++
++import json
++import sys
++from pathlib import Path
++
++REGISTRY = Path(__file__).resolve().parent / "agents.json"
++
++
++class IdentityError(ValueError):
++    """The requested review violates the owner or vendor rules."""
++
++
++def load(path=REGISTRY):
++    data = json.loads(Path(path).read_text())
++    channels = data["channels"]
++    prefixes = data["vendor_prefixes"]
++    if not isinstance(channels, dict) or not isinstance(prefixes, dict):
++        raise ValueError("agents.json: channels and vendor_prefixes must be objects")
++    for name, spec in channels.items():
++        vendors = spec.get("vendors")
++        if vendors != "by-model" and not (isinstance(vendors, list) and vendors and all(v in prefixes for v in vendors)):
++            raise ValueError(f"agents.json: channel {name} has unknown vendors {vendors!r}")
++    return data
++
++
++def model_vendor(registry, model):
++    """Return the vendor of a model ID; fail closed on routers and unknown IDs."""
++    ident = model.strip().lower()
++    if not ident or ident in registry.get("unresolvable_models", []):
++        raise IdentityError(f"model {model!r} is a router or empty; pin a concrete model")
++    for vendor, prefixes in registry["vendor_prefixes"].items():
++        if any(ident.startswith(p) for p in prefixes):
++            return vendor
++    raise IdentityError(f"model {model!r} matches no known vendor; add its prefix to agents.json")
++
++
++def owners(registry):
++    return sorted(n for n, s in registry["channels"].items() if s.get("can_own"))
++
++
++def channel_vendors(registry, channel):
++    spec = registry["channels"].get(channel)
++    if spec is None:
++        raise IdentityError(f"unknown agent {channel!r}")
++    return spec["vendors"]
++
++
++def excluded_vendors(registry, owner=None, authors=(), author_models=()):
++    """Vendors that may not review this work."""
++    if owner is not None and owner not in owners(registry):
++        raise IdentityError(f"--owner must be one of {', '.join(owners(registry))}")
++    excluded, needs_models = set(), False
++    for agent in ([owner] if owner else []) + list(authors):
++        vendors = channel_vendors(registry, agent)
++        if vendors == "by-model":
++            needs_models = True
++        else:
++            excluded.update(vendors)
++    if needs_models and not author_models:
++        raise IdentityError("work owned or authored through a multi-vendor channel (copilot) needs --author-model for every model that wrote it")
++    excluded.update(model_vendor(registry, m) for m in author_models)
++    return excluded
++
++
++def check(registry, reviewer, owner=None, authors=(), author_models=(), reviewer_model=None):
++    """Raise IdentityError unless REVIEWER may review the described work."""
++    spec = registry["channels"].get(reviewer)
++    if spec is None or not spec.get("can_review"):
++        raise IdentityError(f"{reviewer!r} is not a reviewer channel")
++    vendors = spec["vendors"]
++    if vendors == "by-model":
++        if not reviewer_model:
++            raise IdentityError(f"reviewer channel {reviewer} needs the reviewer model to establish its vendor")
++        vendors = [model_vendor(registry, reviewer_model)]
++    clash = set(vendors) & excluded_vendors(registry, owner, authors, author_models)
++    if clash:
++        raise IdentityError(
++            f"{reviewer} ({', '.join(sorted(vendors))}) cannot review work owned or written by the same vendor "
++            f"({', '.join(sorted(clash))}), whatever the model version")
++
++
++def main(argv):
++    if len(argv) < 3 or argv[1] != "check":
++        print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
++        return 64
++    reviewer, owner, authors, models, reviewer_model = argv[2], None, [], [], None
++    args = argv[3:]
++    while args:
++        if len(args) < 2 or not args[1]:
++            print(f"agents.py: {args[0]} needs a value", file=sys.stderr)
++            return 64
++        flag, value, args = args[0], args[1], args[2:]
++        if flag == "--owner":
++            owner = value
++        elif flag == "--author":
++            authors.append(value)
++        elif flag == "--author-model":
++            models.append(value)
++        elif flag == "--reviewer-model":
++            reviewer_model = value
++        else:
++            print(f"agents.py: unknown option {flag}", file=sys.stderr)
++            return 64
++    try:
++        registry = load()
++    except (OSError, KeyError, TypeError, ValueError) as exc:
++        print(f"agents.py: cannot read the registry: {exc}", file=sys.stderr)
++        return 78
++    try:
++        check(registry, reviewer, owner, authors, models, reviewer_model)
++    except IdentityError as exc:
++        print(str(exc), file=sys.stderr)
++        return 64
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv))
+diff --git a/auto-review.sh b/auto-review.sh
+index ce2fd80..4f54982 100755
+--- a/auto-review.sh
++++ b/auto-review.sh
+@@ -2,16 +2,18 @@
+ set -euo pipefail
+ umask 077
+ 
+-packet_root=""; owner=""; authors=()
++packet_root=""; owner=""; task=""; authors=(); author_models=()
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
+-    --author) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude || "$2" == kimi ) ]] || { print -u2 -- "--author must be codex, claude, or kimi"; exit 64; }; authors+=("$2"); shift 2 ;;
++    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
++    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
++    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
++    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
+     *) print -u2 "unknown option: $1"; exit 64 ;;
+   esac
+ done
+-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> <prompt-file> <auto-output.md> <packet-file>..."; exit 64; }
++[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] --owner AGENT [--author AGENT]... [--author-model MODEL]... [--task ID] <hard|routine> <prompt-file> <auto-output.md> <packet-file>..."; exit 64; }
+ tier="$1"; prompt="$2"; output="$3"; shift 3
+ [[ "$tier" == hard || "$tier" == routine ]] || { print -u2 "automatic review tier must be hard or routine"; exit 64; }
+ [[ -n "$owner" ]] || { print -u2 "--owner is required for automatic reviewer selection"; exit 64; }
+@@ -30,13 +32,15 @@ if git -C "$gateway" rev-parse --git-dir >/dev/null 2>&1; then
+   [[ -z "$wrapper_dirty" ]] || { print -u2 "gateway wrapper files have uncommitted changes"; exit 78; }
+ fi
+ set +e
+-selection="$(python3 "$gateway/reviewer-select.py" "$gateway/reviewer-roster.json" "$owner" "$output" "${authors[@]}" 2>&1)"
++identity=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
++[[ -z "$task" ]] || identity+=(--task "$task")
++selection="$(python3 "$gateway/reviewer-select.py" "$gateway/reviewer-roster.json" "$owner" "$output" "${authors[@]}" "${(@)${(@)author_models/#/--author-model=}}" 2>&1)"
+ code=$?
+ set -e
+ [[ $code -eq 0 ]] || { print -u2 "$selection"; exit "$code"; }
+ candidates=(${(f)selection})
+ [[ $#candidates -gt 0 ]] || { print -u2 "no eligible active subscription reviewer; use gemini-review.sh"; exit 78; }
+-forward=(--owner "$owner")
++forward=("${identity[@]}")
+ [[ -z "$packet_root" ]] || forward+=(--packet-root "$packet_root")
+ last_code=78
+ for provider in "${candidates[@]}"; do
+diff --git a/claude-review.sh b/claude-review.sh
+index 1e310c1..f37fbdb 100755
+--- a/claude-review.sh
++++ b/claude-review.sh
+@@ -2,16 +2,21 @@
+ set -euo pipefail
+ umask 077
+ 
+-packet_root=""; owner=""
++packet_root=""; owner=""; task=""; authors=(); author_models=()
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
++    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
++    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
++    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
++    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
+     *) print -u2 "unknown option: $1"; exit 64 ;;
+   esac
+ done
+-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <model> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
+-[[ "$owner" != claude ]] || { print -u2 "Claude cannot review work it owns; use codex-review.sh"; exit 64; }
++[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <model> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
++# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
++identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
++python3 "${0:A:h}/agents.py" check claude "${identity[@]}" || exit $?
+ requested_model="$1"; prompt="$2"; output="$3"; shift 3
+ outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
+ [[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
+@@ -66,5 +71,5 @@ if [[ "$policy_active" == true ]]; then
+ fi
+ usage="$(jq -c '{usage: (.usage // null | if . then {input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens} else null end), total_cost_usd, duration_ms, num_turns}' "$stdout")"
+ checks="$(jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-claims.py")"
+-{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
++{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
+ chmod 444 "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Claude artifact or checksum was not created"; print "captured $output"
+diff --git a/codex-review.sh b/codex-review.sh
+index 02b764e..87100cc 100755
+--- a/codex-review.sh
++++ b/codex-review.sh
+@@ -1,16 +1,21 @@
+ #!/bin/zsh
+ set -euo pipefail
+ umask 077
+-packet_root=""; owner=""
++packet_root=""; owner=""; task=""; authors=(); author_models=()
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
++    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
++    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
++    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
++    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
+     *) print -u2 "unknown option: $1"; exit 64 ;;
+   esac
+ done
+-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <hard|routine> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
+-[[ "$owner" != codex ]] || { print -u2 "Codex cannot review work it owns; use claude-review.sh"; exit 64; }
++[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <hard|routine> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
++# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
++identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
++python3 "${0:A:h}/agents.py" check codex "${identity[@]}" || exit $?
+ requested_model="$1"; prompt="$2"; output="$3"; shift 3
+ outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
+ [[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
+@@ -70,5 +75,5 @@ blocked="$(jq -s '[foreach .[] as $e (false; . or ($e.type == "turn.started"); i
+ # pinned request.
+ usage="$(jq -sc '[.[] | select(.type == "turn.completed") | .usage] | last // null' "$stdout" 2>/dev/null || print null)"
+ checks="$(python3 "$(dirname "$0")/reviewer-claims.py" < "$last")"
+-{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
++{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
+ chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Codex artifact or checksum was not created"; print "captured $output"
+diff --git a/docs-check.py b/docs-check.py
+index c98ac8e..07626d9 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -29,6 +29,9 @@ REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Kimi review")
+ FINDING = re.compile(r"^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
+ CONDITION = re.compile(r"^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
+ VALIDATOR = GATEWAY / "reviewer-validate.py"
++_spec = __import__("importlib.util").util.spec_from_file_location("agents", GATEWAY / "agents.py")
++agents = __import__("importlib.util").util.module_from_spec(_spec)
++_spec.loader.exec_module(agents)
+ ROW_ID = re.compile(r"^R(\d+)-([FC]\d+)$")
+ CLOSURE = "raw review compared with its rows; no unlabeled actionable item"
+ MAX_OBSERVATION_AGE = 2 * 3600
+@@ -60,6 +63,21 @@ def artifact_text(path):
+     return raw
+ 
+ 
++def artifact_identity(path):
++    """Return (reviewer, owner, authors, author_models) recorded by the wrapper."""
++    reviewer = path.name.split("-", 1)[0]
++    if path.suffix == ".json":
++        try:
++            meta = json.loads(path.read_text(errors="replace")).get("reviewer_metadata") or {}
++        except json.JSONDecodeError:
++            meta = {}
++        return reviewer, meta.get("owner") or None, list(meta.get("authors") or []), list(meta.get("author_models") or [])
++    head = path.read_text(errors="replace").split("\n\n", 2)[:2]
++    fields = dict(m.groups() for m in re.finditer(r"(?m)^(Owner|Authors|Author models): (.+)$", "\n".join(head)))
++    split = lambda key: [v.strip() for v in fields.get(key, "").split(",") if v.strip()]
++    return reviewer, fields.get("Owner"), split("Authors"), split("Author models")
++
++
+ def is_review_artifact(path):
+     if path.suffix == ".json":
+         try:
+@@ -315,11 +333,16 @@ def record(repo):
+             errors.append("the gateway baseline records no agent cache, so the memory budget is unenforced")
+         else:
+             check_memory(gateway_base["agent_cache"], errors)
++    registry = agents.load()
+     for wpath in workstreams(repo):
+         ws = Workstream(repo, wpath)
+         name = wpath.relative_to(repo)
+         if not ws.header.get("Owner"):
+             errors.append(f"{name}: no Owner line")
++        for value in ws.header.get("Owner", []):
++            first = re.match(r"[A-Za-z]+", value)
++            if not first or first.group(0).lower() not in agents.owners(registry):
++                errors.append(f"{name}: Owner must name one of {', '.join(agents.owners(registry))}: {value[:60]}")
+         errors.extend(f"{name}: {p}" for p in ws.problems)
+         for rnd, rel in sorted(ws.reviews.items()):
+             art = (repo / rel)
+@@ -346,6 +369,11 @@ def record(repo):
+                         errors.append(f"{name}: {frel} was modified, deleted, or renamed after its first commit")
+                     if len(git(repo, "log", "--format=%H", "--diff-filter=A", "--", frel)[1].split()) > 1:
+                         errors.append(f"{name}: {frel} was added more than once (replaced)")
++            reviewer, owner, authors, models = artifact_identity(art)
++            try:
++                agents.check(registry, reviewer, owner, authors, models)
++            except agents.IdentityError as exc:
++                errors.append(f"{name}: r{rnd:02d} breaks reviewer independence: {exc}")
+             items, dupes = labeled_items(art)
+             errors.extend(f"{name}: r{rnd:02d} has duplicate label {d}" for d in dupes)
+             post_adoption = arel not in legacy
+diff --git a/gemini-review.sh b/gemini-review.sh
+index f245cfa..8193a74 100755
+--- a/gemini-review.sh
++++ b/gemini-review.sh
+@@ -1,15 +1,21 @@
+ #!/bin/zsh
+ set -euo pipefail
+ umask 077
+-packet_root=""; owner=""
++packet_root=""; owner=""; task=""; authors=(); author_models=()
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
++    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
++    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
++    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
++    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
+     *) print -u2 "unknown option: $1"; exit 64 ;;
+   esac
+ done
+-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <model> <prompt-file> <new-output.json> <packet-file>..."; exit 64; }
++[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <model> <prompt-file> <new-output.json> <packet-file>..."; exit 64; }
++# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
++identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
++python3 "${0:A:h}/agents.py" check gemini "${identity[@]}" || exit $?
+ requested_model="$1"; model="$requested_model"; prompt="$2"; output="$3"; shift 3
+ outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
+ [[ "$outdir" == "$root/.collab" && "$base" == *.json && ! -e "$output" && ! -e "$outdir/${base%.json}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
+@@ -113,6 +119,6 @@ resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response"
+ jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
+ checks="$(jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-claims.py" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+ denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
+-jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" --arg truncation "$truncation" \
+-  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end) + (if $truncation == "" then {} else {truncation_warning:$truncation} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
++jq --arg owner "$owner" --arg task "$task" --argjson authors "$(print -rl -- "${authors[@]}" | jq -R . | jq -sc 'map(select(. != ""))')" --argjson author_models "$(print -rl -- "${author_models[@]}" | jq -R . | jq -sc 'map(select(. != ""))')" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" --arg truncation "$truncation" \
++  '. + {reviewer_metadata:({owner:$owner,authors:$authors,author_models:$author_models,task:$task,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end) + (if $truncation == "" then {} else {truncation_warning:$truncation} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+ chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"
+diff --git a/kimi-review.sh b/kimi-review.sh
+index 5221e3c..24379dd 100755
+--- a/kimi-review.sh
++++ b/kimi-review.sh
+@@ -2,15 +2,21 @@
+ set -euo pipefail
+ umask 077
+ 
+-packet_root=""; owner=""
++packet_root=""; owner=""; task=""; authors=(); author_models=()
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
+-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
++    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
++    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
++    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
++    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
+     *) print -u2 "unknown option: $1"; exit 64 ;;
+   esac
+ done
+-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <hard|routine> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
++[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <hard|routine> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
++# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
++identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
++python3 "${0:A:h}/agents.py" check kimi "${identity[@]}" || exit $?
+ requested_model="$1"; prompt="$2"; output="$3"; shift 3
+ outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
+ [[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
+@@ -98,5 +104,5 @@ tool_events="$(jq -sc '[.[] | select(.role? == "tool" or ((.tool_calls? // []) |
+ [[ "$tool_events" -eq 0 ]] || fail 70 "Kimi response failed isolation validation: tool events were emitted"
+ python3 "$(dirname "$0")/reviewer-validate.py" < "$last" || fail 70 "Kimi response failed substance validation"
+ checks="$(python3 "$(dirname "$0")/reviewer-claims.py" < "$last")"
+-{ print '# Kimi review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by Kimi Code stream-json"; print "CLI version: $kimi_version"; print "Tool events: $tool_events"; print "Usage: not reported by Kimi Code stream-json"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
++{ print '# Kimi review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by Kimi Code stream-json"; print "CLI version: $kimi_version"; print "Tool events: $tool_events"; print "Usage: not reported by Kimi Code stream-json"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
+ chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Kimi artifact or checksum was not created"; print "captured $output"
+diff --git a/reviewer-roster.json b/reviewer-roster.json
+index 6f8467c..6ce5320 100644
+--- a/reviewer-roster.json
++++ b/reviewer-roster.json
+@@ -1,4 +1 @@
+-{
+-  "active_reviewers": ["kimi", "claude", "codex"],
+-  "tie_break_order": ["kimi", "claude", "codex"]
+-}
++{"active_reviewers": ["claude"], "tie_break_order": ["kimi", "claude", "codex"]}
+diff --git a/reviewer-select.py b/reviewer-select.py
+index ea87923..d650570 100644
+--- a/reviewer-select.py
++++ b/reviewer-select.py
+@@ -12,9 +12,11 @@ ROOT = Path(__file__).resolve().parent
+ _spec = importlib.util.spec_from_file_location("review_budget", ROOT / "review-budget.py")
+ budget = importlib.util.module_from_spec(_spec)
+ _spec.loader.exec_module(budget)
++_spec = importlib.util.spec_from_file_location("agents", ROOT / "agents.py")
++agents = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(agents)
+ 
+ SUBSCRIPTION_REVIEWERS = ("claude", "codex", "kimi")
+-OWNERS = ("claude", "codex")
+ 
+ 
+ def _string_list(value, label):
+@@ -75,16 +77,27 @@ def _latest_eligible(topic_rounds, available):
+     return provider if provider in available else None
+ 
+ 
+-def order(policy_path, owner, output, today=None, authors=()):
+-    """Return provider names in invocation order for an auto-* output path."""
+-    if owner not in OWNERS:
+-        raise ValueError("owner must be codex or claude")
+-    if any(author not in SUBSCRIPTION_REVIEWERS for author in authors):
+-        raise ValueError("authors may contain only claude, codex, and kimi")
++def _independent(registry, provider, owner, authors, author_models):
++    try:
++        agents.check(registry, provider, owner, authors, author_models)
++        return True
++    except agents.IdentityError:
++        return False
++
++
++def order(policy_path, owner, output, today=None, authors=(), author_models=(), registry=None):
++    """Return provider names in invocation order for an auto-* output path.
++
++    A provider is eligible only if no vendor it runs is the vendor of the
++    owner, an additional author, or any authoring model (agents.json).
++    """
++    registry = registry or agents.load()
++    # Validates owner, authors, and author models; raises IdentityError (a ValueError).
++    agents.excluded_vendors(registry, owner, authors, author_models)
+     output = Path(output)
+     active, tie_order = load_roster(Path(policy_path))
+-    excluded = {owner, *authors}
+-    eligible = [provider for provider in tie_order if provider in active and provider not in excluded]
++    eligible = [provider for provider in tie_order
++                if provider in active and _independent(registry, provider, owner, authors, author_models)]
+     if not eligible:
+         raise ValueError("no eligible active subscription reviewer; use gemini-review.sh")
+     if not output.parent.is_dir():
+@@ -113,12 +126,18 @@ def order(policy_path, owner, output, today=None, authors=()):
+ 
+ def main(argv):
+     if len(argv) < 4:
+-        print("usage: reviewer-select.py ROSTER_JSON <codex|claude> AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...]", file=sys.stderr)
++        print("usage: reviewer-select.py ROSTER_JSON OWNER AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...] [--author-model=MODEL...]", file=sys.stderr)
+         return 64
++    extra = argv[4:]
++    authors = [a for a in extra if not a.startswith("--author-model=")]
++    models = [a.split("=", 1)[1] for a in extra if a.startswith("--author-model=")]
+     try:
+-        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=argv[4:]):
++        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=authors, author_models=models):
+             print(provider)
+         return 0
++    except agents.IdentityError as exc:
++        print(f"reviewer selection error: {exc}", file=sys.stderr)
++        return 64
+     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+         print(f"reviewer selection error: {exc}", file=sys.stderr)
+         return 78
+diff --git a/tests/test_agents.py b/tests/test_agents.py
+new file mode 100644
+index 0000000..29b4874
+--- /dev/null
++++ b/tests/test_agents.py
+@@ -0,0 +1,85 @@
++#!/usr/bin/env python3
++import importlib.util
++import json
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parent.parent
++
++
++def _load(name, file):
++    spec = importlib.util.spec_from_file_location(name, ROOT / file)
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++agents = _load("agents", "agents.py")
++docs_check = _load("docs_check", "docs-check.py")
++
++
++class AgentsTest(unittest.TestCase):
++    def setUp(self):
++        self.reg = agents.load()
++
++    def test_copilot_is_an_owner_and_reviewer_only_agents_are_not(self):
++        self.assertEqual(agents.owners(self.reg), ["claude", "codex", "copilot"])
++
++    def test_vendors_cover_every_copilot_family(self):
++        for model, vendor in {"mai-code-2-flash": "microsoft", "gpt-5.6-luna": "openai",
++                              "gpt-5.3-codex": "openai", "claude-haiku-5.5": "anthropic",
++                              "gemini-4-hydrogen": "google", "grok-4.7": "xai", "kimi-k3": "moonshot"}.items():
++            self.assertEqual(agents.model_vendor(self.reg, model), vendor)
++
++    def test_same_vendor_never_reviews_whatever_the_version(self):
++        for reviewer, model in (("gemini", "gemini-4-hydrogen"), ("gemini", "gemini-3.8-flash"),
++                                ("claude", "claude-sonnet-5"), ("codex", "gpt-6.1-terra"), ("kimi", "kimi-k3")):
++            with self.subTest(reviewer=reviewer, model=model), self.assertRaises(agents.IdentityError):
++                agents.check(self.reg, reviewer, "copilot", (), (model,))
++
++    def test_other_vendor_may_review(self):
++        agents.check(self.reg, "claude", "copilot", (), ("gpt-6-luna", "mai-code-2"))
++        agents.check(self.reg, "gemini", "claude")
++        agents.check(self.reg, "claude", "codex")
++
++    def test_owner_channel_rule_still_holds(self):
++        for reviewer, owner in (("claude", "claude"), ("codex", "codex")):
++            with self.subTest(owner=owner), self.assertRaises(agents.IdentityError):
++                agents.check(self.reg, reviewer, owner)
++
++    def test_copilot_cannot_review_until_its_wrapper_exists(self):
++        with self.assertRaises(agents.IdentityError):
++            agents.check(self.reg, "copilot", "claude", reviewer_model="gpt-6-luna")
++
++    def test_cli_exit_codes(self):
++        self.assertEqual(agents.main(["agents.py", "check", "claude", "--owner", "codex"]), 0)
++        self.assertEqual(agents.main(["agents.py", "check", "claude", "--owner", "copilot"]), 64)
++        self.assertEqual(agents.main(["agents.py", "check", "claude", "--owner"]), 64)
++
++
++class ArtifactIdentityTest(unittest.TestCase):
++    def test_markdown_and_json_metadata(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            md = Path(tmp) / "claude-2026-11-20-topic-r01.md"
++            md.write_text("# Claude review\n\nOwner: copilot\nAuthor models: gpt-6.1-terra, mai-code-2-flash\n"
++                          "Task: T7\n\nBody mentioning Owner: claude later is ignored.\n")
++            self.assertEqual(docs_check.artifact_identity(md),
++                             ("claude", "copilot", [], ["gpt-6.1-terra", "mai-code-2-flash"]))
++            js = Path(tmp) / "gemini-2026-11-20-topic-r02.json"
++            js.write_text(json.dumps({"response": "x", "reviewer_metadata": {
++                "owner": "copilot", "authors": [], "author_models": ["gemini-4-hydrogen"]}}))
++            reviewer, owner, authors, models = docs_check.artifact_identity(js)
++            with self.assertRaises(agents.IdentityError):
++                agents.check(agents.load(), reviewer, owner, authors, models)
++
++    def test_legacy_artifact_without_identity_passes(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            md = Path(tmp) / "claude-2026-10-01-old.md"
++            md.write_text("# Claude review\n\nWrapper revision: abc\n\nBody\n")
++            reviewer, owner, authors, models = docs_check.artifact_identity(md)
++            agents.check(agents.load(), reviewer, owner, authors, models)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_reviewer_select.py b/tests/test_reviewer_select.py
+index bbe6e62..3725658 100644
+--- a/tests/test_reviewer_select.py
++++ b/tests/test_reviewer_select.py
+@@ -47,7 +47,7 @@ class ReviewerSelectTest(unittest.TestCase):
+         self.assertEqual(self.select("codex"), ["kimi", "claude"])
+         self.assertEqual(self.select("claude"), ["kimi", "codex"])
+         for owner in ("kimi", "gemini", ""):
+-            with self.subTest(owner=owner), self.assertRaisesRegex(ValueError, "owner must be codex or claude"):
++            with self.subTest(owner=owner), self.assertRaisesRegex(ValueError, "owner must be one of claude, codex, copilot"):
+                 self.select(owner)
+ 
+     def test_gemini_is_never_in_the_subscription_rotation(self):
+@@ -62,8 +62,31 @@ class ReviewerSelectTest(unittest.TestCase):
+         self.assertEqual(self.select(authors=("kimi",)), ["claude"])
+         with self.assertRaisesRegex(ValueError, "no eligible"):
+             self.select(authors=("kimi", "claude"))
+-        with self.assertRaisesRegex(ValueError, "authors may contain"):
+-            self.select(authors=("gemini",))
++        with self.assertRaisesRegex(ValueError, "unknown agent"):
++            self.select(authors=("nobody",))
++
++    def test_copilot_owner_needs_author_models(self):
++        with self.assertRaisesRegex(ValueError, "needs --author-model"):
++            self.select("copilot")
++        with self.assertRaisesRegex(ValueError, "needs --author-model"):
++            self.select("claude", authors=("copilot",))
++
++    def test_vendor_rule_ignores_model_version(self):
++        # Copilot on an Anthropic model: no Claude review, whatever the version.
++        self.assertEqual(selector.order(self.roster, "copilot", self.output(), today=TODAY,
++                                        author_models=("claude-sonnet-5",)), ["kimi", "codex"])
++        # Copilot on OpenAI models: Codex excluded, Claude eligible.
++        self.assertEqual(selector.order(self.roster, "copilot", self.output(), today=TODAY,
++                                        author_models=("gpt-6.1-terra", "gpt-5.3-codex")), ["kimi", "claude"])
++        # Mixed Anthropic + Moonshot + OpenAI authorship leaves no subscription reviewer.
++        with self.assertRaisesRegex(ValueError, "no eligible"):
++            selector.order(self.roster, "copilot", self.output(), today=TODAY,
++                           author_models=("claude-haiku-4.5", "kimi-k3", "gpt-6-luna"))
++
++    def test_unknown_and_router_models_fail_closed(self):
++        for model in ("copilot-fusion", "auto", "mystery-1"):
++            with self.subTest(model=model), self.assertRaises(ValueError):
++                selector.order(self.roster, "copilot", self.output(), today=TODAY, author_models=(model,))
+ 
+     def test_template_date_must_be_today(self):
+         with self.assertRaisesRegex(ValueError, "date must be today"):
+@@ -173,7 +196,7 @@ set -euo pipefail
+ provider="${0:t}"; provider="${provider%-review.sh}"
+ while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+-    --owner|--packet-root) shift 2 ;;
++    --owner|--packet-root|--author|--author-model|--task) shift 2 ;;
+     *) exit 64 ;;
+   esac
+ done
+@@ -199,8 +222,11 @@ class AutoReviewTest(unittest.TestCase):
+         self.base = Path(self.tmp.name)
+         self.gateway = self.base / "gateway"
+         self.gateway.mkdir()
+-        for name in ("auto-review.sh", "reviewer-select.py", "review-budget.py", "review-budget.json", "reviewer-roster.json"):
++        for name in ("auto-review.sh", "reviewer-select.py", "review-budget.py", "review-budget.json", "reviewer-roster.json", "agents.py", "agents.json"):
+             shutil.copy2(ROOT / name, self.gateway / name)
++        # Fixed roster: tests must not depend on which subscriptions are live today.
++        (self.gateway / "reviewer-roster.json").write_text(json.dumps(
++            {"active_reviewers": ["kimi", "claude", "codex"], "tie_break_order": ["kimi", "claude", "codex"]}))
+         provider = self.gateway / "provider-mock.sh"
+         provider.write_text(MOCK_PROVIDER)
+         provider.chmod(0o755)
+@@ -224,7 +250,7 @@ class AutoReviewTest(unittest.TestCase):
+     def git(self, *args):
+         subprocess.run(["git", "-C", str(self.gateway), *args], check=True, capture_output=True)
+ 
+-    def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=()):
++    def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=(), author_models=()):
+         env = os.environ.copy()
+         env["AUTO_MOCK_LOG"] = str(self.log)
+         for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE"):
+@@ -240,7 +266,8 @@ class AutoReviewTest(unittest.TestCase):
+         output = self.collab / name
+         result = subprocess.run(
+             [str(self.gateway / "auto-review.sh"), "--owner", owner,
+-             *(arg for author in authors for arg in ("--author", author)), tier,
++             *(arg for author in authors for arg in ("--author", author)),
++             *(arg for model in author_models for arg in ("--author-model", model)), tier,
+              str(self.repo / "prompt.md"), str(output), str(self.repo / "packet.md")],
+             capture_output=True,
+             text=True,
+@@ -263,6 +290,14 @@ class AutoReviewTest(unittest.TestCase):
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
+ 
++    def test_auto_copilot_owner_follows_author_model_vendor(self):
++        result = self.run_auto(owner="copilot", author_models=("claude-sonnet-5.5",))
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-topic.md"])
++        refused = self.run_auto(owner="copilot", name=f"auto-{self.day}-other.md")
++        self.assertEqual(refused.returncode, 64, refused.stderr)
++        self.assertIn("needs --author-model", refused.stderr)
++
+     def test_preflight_failure_fails_over_and_maps_claude_hard_tier(self):
+         result = self.run_auto("AUTO_MOCK_KIMI_CODE=69", tier="hard")
+         self.assertEqual(result.returncode, 0, result.stderr)
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index 2518854..8a70d96 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -396,6 +396,30 @@ PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --pac
+   "$test_root/prompt.md" "$test_root/.collab/gemini-owned.json" "$test_root/packet/source.md" >/dev/null
+ jq -e '.reviewer_metadata.owner == "claude"' "$test_root/.collab/gemini-owned.json" >/dev/null
+ 
++# Vendor independence (agents.json): no vendor reviews its own work, whatever the
++# model version; multi-vendor owners (Copilot) must name every authoring model;
++# routers and unknown models fail closed. All refusals happen before any model call.
++owner_rejects "$root/claude-review.sh" --owner copilot sonnet "$test_root/prompt.md" "$test_root/.collab/copilot-nomodel.md" "$test_root/packet/source.md"
++owner_rejects "$root/claude-review.sh" --owner copilot --author-model claude-sonnet-5 sonnet "$test_root/prompt.md" "$test_root/.collab/copilot-anthropic.md" "$test_root/packet/source.md"
++owner_rejects "$root/claude-review.sh" --owner codex --author copilot --author-model claude-haiku-4.5 sonnet "$test_root/prompt.md" "$test_root/.collab/mixed-anthropic.md" "$test_root/packet/source.md"
++owner_rejects "$root/gemini-review.sh" --owner copilot --author-model gemini-4-hydrogen pro "$test_root/prompt.md" "$test_root/.collab/copilot-google.json" "$test_root/packet/source.md"
++owner_rejects "$root/gemini-review.sh" --owner copilot --author-model copilot-fusion pro "$test_root/prompt.md" "$test_root/.collab/copilot-router.json" "$test_root/packet/source.md"
++owner_rejects "$root/codex-review.sh" --owner copilot --author-model gpt-6-luna hard "$test_root/prompt.md" "$test_root/.collab/copilot-openai.md" "$test_root/packet/source.md"
++owner_rejects "$root/claude-review.sh" --owner copilot --task 'bad task' --author-model gpt-6-luna sonnet "$test_root/prompt.md" "$test_root/.collab/copilot-badtask.md" "$test_root/packet/source.md"
++for f in copilot-nomodel copilot-anthropic mixed-anthropic copilot-google copilot-router copilot-openai copilot-badtask; do
++  [[ ! -e "$test_root/.collab/$f.diagnostic.json" ]] || { print -u2 "identity refusal left a diagnostic: $f"; exit 1; }
++done
++PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
++  "$root/claude-review.sh" --owner copilot --author-model gpt-6.1-terra --author-model mai-code-2-flash --task T7 sonnet "$test_root/prompt.md" \
++  "$test_root/.collab/claude-copilot.md" "$test_root/packet/source.md" >/dev/null
++grep -Fx 'Owner: copilot' "$test_root/.collab/claude-copilot.md" >/dev/null
++grep -Fx 'Author models: gpt-6.1-terra, mai-code-2-flash' "$test_root/.collab/claude-copilot.md" >/dev/null
++grep -Fx 'Task: T7' "$test_root/.collab/claude-copilot.md" >/dev/null
++mkdir -p "$test_root/vendor/.collab"  # fresh repository: the shared one is at its Gemini daily cap
++PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --packet-root "$test_root" --owner copilot --author-model claude-sonnet-5.5 --task T8 pro \
++  "$test_root/prompt.md" "$test_root/vendor/.collab/gemini-copilot.json" "$test_root/packet/source.md" >/dev/null
++jq -e '.reviewer_metadata.owner == "copilot" and .reviewer_metadata.author_models == ["claude-sonnet-5.5"] and .reviewer_metadata.task == "T8" and .reviewer_metadata.authors == []' "$test_root/vendor/.collab/gemini-copilot.json" >/dev/null
++
+ # Kimi uses managed subscription OAuth, explicit tier mappings, and an isolated
+ # no-tools CLI session. The mock checks its workspace, agent, skills, and env.
+ kimi_repo="$test_root/kimi-repo"; mkdir -p "$kimi_repo/.collab"
