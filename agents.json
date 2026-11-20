@@ -1,0 +1,18 @@
+{
+  "channels": {
+    "claude":  {"vendors": ["anthropic"], "can_own": true,  "can_review": true},
+    "codex":   {"vendors": ["openai"],    "can_own": true,  "can_review": true},
+    "copilot": {"vendors": "by-model",    "can_own": true,  "can_review": false},
+    "kimi":    {"vendors": ["moonshot"],  "can_own": false, "can_review": true},
+    "gemini":  {"vendors": ["google"],    "can_own": false, "can_review": true}
+  },
+  "vendor_prefixes": {
+    "anthropic": ["claude-"],
+    "openai": ["gpt-", "codex-", "o1", "o3", "o4"],
+    "google": ["gemini-"],
+    "microsoft": ["mai-"],
+    "xai": ["grok-"],
+    "moonshot": ["kimi-"]
+  },
+  "unresolvable_models": ["auto", "copilot-fusion", "fusion"]
+}

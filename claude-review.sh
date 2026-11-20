@@ -2,16 +2,21 @@
 set -euo pipefail
 umask 077
 
-packet_root=""; owner=""
+packet_root=""; owner=""; task=""; authors=(); author_models=()
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
+    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
+    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
+    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
+    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
     *) print -u2 "unknown option: $1"; exit 64 ;;
   esac
 done
-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <model> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
-[[ "$owner" != claude ]] || { print -u2 "Claude cannot review work it owns; use codex-review.sh"; exit 64; }
+[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <model> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
+# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
+identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
+python3 "${0:A:h}/agents.py" check claude "${identity[@]}" || exit $?
 requested_model="$1"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
 [[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
@@ -66,5 +71,5 @@ if [[ "$policy_active" == true ]]; then
 fi
 usage="$(jq -c '{usage: (.usage // null | if . then {input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens} else null end), total_cost_usd, duration_ms, num_turns}' "$stdout")"
 checks="$(jq -r '.result' "$stdout" | python3 "$(dirname "$0")/reviewer-claims.py")"
-{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
+{ print '# Claude review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; [[ "$policy_active" == true ]] && print "Selected model: $model"; print "Resolved model(s): $resolved"; print "Effort: $effort"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; jq -r '.result' "$stdout"; } > "$output"
 chmod 444 "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Claude artifact or checksum was not created"; print "captured $output"

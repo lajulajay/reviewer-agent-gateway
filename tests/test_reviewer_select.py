@@ -47,7 +47,7 @@ class ReviewerSelectTest(unittest.TestCase):
         self.assertEqual(self.select("codex"), ["kimi", "claude"])
         self.assertEqual(self.select("claude"), ["kimi", "codex"])
         for owner in ("kimi", "gemini", ""):
-            with self.subTest(owner=owner), self.assertRaisesRegex(ValueError, "owner must be codex or claude"):
+            with self.subTest(owner=owner), self.assertRaisesRegex(ValueError, "owner must be one of claude, codex, copilot"):
                 self.select(owner)
 
     def test_gemini_is_never_in_the_subscription_rotation(self):
@@ -62,8 +62,31 @@ class ReviewerSelectTest(unittest.TestCase):
         self.assertEqual(self.select(authors=("kimi",)), ["claude"])
         with self.assertRaisesRegex(ValueError, "no eligible"):
             self.select(authors=("kimi", "claude"))
-        with self.assertRaisesRegex(ValueError, "authors may contain"):
-            self.select(authors=("gemini",))
+        with self.assertRaisesRegex(ValueError, "unknown agent"):
+            self.select(authors=("nobody",))
+
+    def test_copilot_owner_needs_author_models(self):
+        with self.assertRaisesRegex(ValueError, "needs --author-model"):
+            self.select("copilot")
+        with self.assertRaisesRegex(ValueError, "needs --author-model"):
+            self.select("claude", authors=("copilot",))
+
+    def test_vendor_rule_ignores_model_version(self):
+        # Copilot on an Anthropic model: no Claude review, whatever the version.
+        self.assertEqual(selector.order(self.roster, "copilot", self.output(), today=TODAY,
+                                        author_models=("claude-sonnet-5",)), ["kimi", "codex"])
+        # Copilot on OpenAI models: Codex excluded, Claude eligible.
+        self.assertEqual(selector.order(self.roster, "copilot", self.output(), today=TODAY,
+                                        author_models=("gpt-6.1-terra", "gpt-5.3-codex")), ["kimi", "claude"])
+        # Mixed Anthropic + Moonshot + OpenAI authorship leaves no subscription reviewer.
+        with self.assertRaisesRegex(ValueError, "no eligible"):
+            selector.order(self.roster, "copilot", self.output(), today=TODAY,
+                           author_models=("claude-haiku-4.5", "kimi-k3", "gpt-6-luna"))
+
+    def test_unknown_and_router_models_fail_closed(self):
+        for model in ("copilot-fusion", "auto", "mystery-1"):
+            with self.subTest(model=model), self.assertRaises(ValueError):
+                selector.order(self.roster, "copilot", self.output(), today=TODAY, author_models=(model,))
 
     def test_template_date_must_be_today(self):
         with self.assertRaisesRegex(ValueError, "date must be today"):
@@ -173,7 +196,7 @@ set -euo pipefail
 provider="${0:t}"; provider="${provider%-review.sh}"
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
-    --owner|--packet-root) shift 2 ;;
+    --owner|--packet-root|--author|--author-model|--task) shift 2 ;;
     *) exit 64 ;;
   esac
 done
@@ -199,8 +222,11 @@ class AutoReviewTest(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.gateway = self.base / "gateway"
         self.gateway.mkdir()
-        for name in ("auto-review.sh", "reviewer-select.py", "review-budget.py", "review-budget.json", "reviewer-roster.json"):
+        for name in ("auto-review.sh", "reviewer-select.py", "review-budget.py", "review-budget.json", "reviewer-roster.json", "agents.py", "agents.json"):
             shutil.copy2(ROOT / name, self.gateway / name)
+        # Fixed roster: tests must not depend on which subscriptions are live today.
+        (self.gateway / "reviewer-roster.json").write_text(json.dumps(
+            {"active_reviewers": ["kimi", "claude", "codex"], "tie_break_order": ["kimi", "claude", "codex"]}))
         provider = self.gateway / "provider-mock.sh"
         provider.write_text(MOCK_PROVIDER)
         provider.chmod(0o755)
@@ -224,7 +250,7 @@ class AutoReviewTest(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", str(self.gateway), *args], check=True, capture_output=True)
 
-    def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=()):
+    def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=(), author_models=()):
         env = os.environ.copy()
         env["AUTO_MOCK_LOG"] = str(self.log)
         for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE"):
@@ -240,7 +266,8 @@ class AutoReviewTest(unittest.TestCase):
         output = self.collab / name
         result = subprocess.run(
             [str(self.gateway / "auto-review.sh"), "--owner", owner,
-             *(arg for author in authors for arg in ("--author", author)), tier,
+             *(arg for author in authors for arg in ("--author", author)),
+             *(arg for model in author_models for arg in ("--author-model", model)), tier,
              str(self.repo / "prompt.md"), str(output), str(self.repo / "packet.md")],
             capture_output=True,
             text=True,
@@ -262,6 +289,14 @@ class AutoReviewTest(unittest.TestCase):
         result = self.run_auto(authors=("kimi",))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
+
+    def test_auto_copilot_owner_follows_author_model_vendor(self):
+        result = self.run_auto(owner="copilot", author_models=("claude-sonnet-5.5",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-topic.md"])
+        refused = self.run_auto(owner="copilot", name=f"auto-{self.day}-other.md")
+        self.assertEqual(refused.returncode, 64, refused.stderr)
+        self.assertIn("needs --author-model", refused.stderr)
 
     def test_preflight_failure_fails_over_and_maps_claude_hard_tier(self):
         result = self.run_auto("AUTO_MOCK_KIMI_CODE=69", tier="hard")

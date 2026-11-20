@@ -396,6 +396,30 @@ PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --pac
   "$test_root/prompt.md" "$test_root/.collab/gemini-owned.json" "$test_root/packet/source.md" >/dev/null
 jq -e '.reviewer_metadata.owner == "claude"' "$test_root/.collab/gemini-owned.json" >/dev/null
 
+# Vendor independence (agents.json): no vendor reviews its own work, whatever the
+# model version; multi-vendor owners (Copilot) must name every authoring model;
+# routers and unknown models fail closed. All refusals happen before any model call.
+owner_rejects "$root/claude-review.sh" --owner copilot sonnet "$test_root/prompt.md" "$test_root/.collab/copilot-nomodel.md" "$test_root/packet/source.md"
+owner_rejects "$root/claude-review.sh" --owner copilot --author-model claude-sonnet-5 sonnet "$test_root/prompt.md" "$test_root/.collab/copilot-anthropic.md" "$test_root/packet/source.md"
+owner_rejects "$root/claude-review.sh" --owner codex --author copilot --author-model claude-haiku-4.5 sonnet "$test_root/prompt.md" "$test_root/.collab/mixed-anthropic.md" "$test_root/packet/source.md"
+owner_rejects "$root/gemini-review.sh" --owner copilot --author-model gemini-4-hydrogen pro "$test_root/prompt.md" "$test_root/.collab/copilot-google.json" "$test_root/packet/source.md"
+owner_rejects "$root/gemini-review.sh" --owner copilot --author-model copilot-fusion pro "$test_root/prompt.md" "$test_root/.collab/copilot-router.json" "$test_root/packet/source.md"
+owner_rejects "$root/codex-review.sh" --owner copilot --author-model gpt-6-luna hard "$test_root/prompt.md" "$test_root/.collab/copilot-openai.md" "$test_root/packet/source.md"
+owner_rejects "$root/claude-review.sh" --owner copilot --task 'bad task' --author-model gpt-6-luna sonnet "$test_root/prompt.md" "$test_root/.collab/copilot-badtask.md" "$test_root/packet/source.md"
+for f in copilot-nomodel copilot-anthropic mixed-anthropic copilot-google copilot-router copilot-openai copilot-badtask; do
+  [[ ! -e "$test_root/.collab/$f.diagnostic.json" ]] || { print -u2 "identity refusal left a diagnostic: $f"; exit 1; }
+done
+PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
+  "$root/claude-review.sh" --owner copilot --author-model gpt-6.1-terra --author-model mai-code-2-flash --task T7 sonnet "$test_root/prompt.md" \
+  "$test_root/.collab/claude-copilot.md" "$test_root/packet/source.md" >/dev/null
+grep -Fx 'Owner: copilot' "$test_root/.collab/claude-copilot.md" >/dev/null
+grep -Fx 'Author models: gpt-6.1-terra, mai-code-2-flash' "$test_root/.collab/claude-copilot.md" >/dev/null
+grep -Fx 'Task: T7' "$test_root/.collab/claude-copilot.md" >/dev/null
+mkdir -p "$test_root/vendor/.collab"  # fresh repository: the shared one is at its Gemini daily cap
+PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --packet-root "$test_root" --owner copilot --author-model claude-sonnet-5.5 --task T8 pro \
+  "$test_root/prompt.md" "$test_root/vendor/.collab/gemini-copilot.json" "$test_root/packet/source.md" >/dev/null
+jq -e '.reviewer_metadata.owner == "copilot" and .reviewer_metadata.author_models == ["claude-sonnet-5.5"] and .reviewer_metadata.task == "T8" and .reviewer_metadata.authors == []' "$test_root/vendor/.collab/gemini-copilot.json" >/dev/null
+
 # Kimi uses managed subscription OAuth, explicit tier mappings, and an isolated
 # no-tools CLI session. The mock checks its workspace, agent, skills, and env.
 kimi_repo="$test_root/kimi-repo"; mkdir -p "$kimi_repo/.collab"

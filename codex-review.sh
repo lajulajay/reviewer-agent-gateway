@@ -1,16 +1,21 @@
 #!/bin/zsh
 set -euo pipefail
 umask 077
-packet_root=""; owner=""
+packet_root=""; owner=""; task=""; authors=(); author_models=()
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
+    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
+    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
+    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
+    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
     *) print -u2 "unknown option: $1"; exit 64 ;;
   esac
 done
-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <hard|routine> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
-[[ "$owner" != codex ]] || { print -u2 "Codex cannot review work it owns; use claude-review.sh"; exit 64; }
+[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <hard|routine> <prompt-file> <new-output.md> <packet-file>..."; exit 64; }
+# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
+identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
+python3 "${0:A:h}/agents.py" check codex "${identity[@]}" || exit $?
 requested_model="$1"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
 [[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
@@ -70,5 +75,5 @@ blocked="$(jq -s '[foreach .[] as $e (false; . or ($e.type == "turn.started"); i
 # pinned request.
 usage="$(jq -sc '[.[] | select(.type == "turn.completed") | .usage] | last // null' "$stdout" 2>/dev/null || print null)"
 checks="$(python3 "$(dirname "$0")/reviewer-claims.py" < "$last")"
-{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
+{ print '# Codex review'; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"; print "Wrapper revision: $wrapper_rev"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"; print "Resolved model(s): not reported by codex exec"; print "CLI version: $codex_version"; print "Blocked tool attempts: $blocked"; print "Usage: $usage"; [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"; while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
 chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Codex artifact or checksum was not created"; print "captured $output"

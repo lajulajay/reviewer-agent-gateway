@@ -1,15 +1,21 @@
 #!/bin/zsh
 set -euo pipefail
 umask 077
-packet_root=""; owner=""
+packet_root=""; owner=""; task=""; authors=(); author_models=()
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --packet-root) [[ $# -ge 2 ]] || exit 64; packet_root="$2"; shift 2 ;;
-    --owner) [[ $# -ge 2 && ( "$2" == codex || "$2" == claude ) ]] || { print -u2 -- "--owner must be codex or claude"; exit 64; }; owner="$2"; shift 2 ;;
+    --owner) [[ $# -ge 2 && -n "$2" ]] || exit 64; owner="$2"; shift 2 ;;
+    --author) [[ $# -ge 2 && -n "$2" ]] || exit 64; authors+=("$2"); shift 2 ;;
+    --author-model) [[ $# -ge 2 && -n "$2" ]] || exit 64; author_models+=("$2"); shift 2 ;;
+    --task) [[ $# -ge 2 && "$2" =~ '^[A-Za-z0-9._-]+$' ]] || { print -u2 -- "--task must be a short identifier"; exit 64; }; task="$2"; shift 2 ;;
     *) print -u2 "unknown option: $1"; exit 64 ;;
   esac
 done
-[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner codex|claude] <model> <prompt-file> <new-output.json> <packet-file>..."; exit 64; }
+[[ $# -ge 4 ]] || { print -u2 "usage: $0 [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] <model> <prompt-file> <new-output.json> <packet-file>..."; exit 64; }
+# Identity and vendor independence (agents.json): no vendor reviews work it owns or wrote, whatever the model version.
+identity=(); [[ -z "$owner" ]] || identity+=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
+python3 "${0:A:h}/agents.py" check gemini "${identity[@]}" || exit $?
 requested_model="$1"; model="$requested_model"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
 [[ "$outdir" == "$root/.collab" && "$base" == *.json && ! -e "$output" && ! -e "$outdir/${base%.json}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
@@ -113,6 +119,6 @@ resolved="$(jq -r 'select(.event == "init") | .init.model // empty' "$response" 
 jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-validate.py" || fail 70 "Gemini response failed substance validation"
 checks="$(jq -r '.response' <<< "$result" | python3 "$(dirname "$0")/reviewer-claims.py" | jq -Rsc 'split("\n") | map(select(length > 0))')"
 denied="$(jq -sc '[.[] | .toolCall.name? // empty]' "$hook_log" 2>/dev/null)" || denied='["<unparseable hook log>"]'
-jq --arg owner "$owner" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" --arg truncation "$truncation" \
-  '. + {reviewer_metadata:({owner:$owner,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end) + (if $truncation == "" then {} else {truncation_warning:$truncation} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
+jq --arg owner "$owner" --arg task "$task" --argjson authors "$(print -rl -- "${authors[@]}" | jq -R . | jq -sc 'map(select(. != ""))')" --argjson author_models "$(print -rl -- "${author_models[@]}" | jq -R . | jq -sc 'map(select(. != ""))')" --arg wrev "$wrapper_rev" --arg requested "$requested_model" --arg selected "$selected_model" --arg resolved "$resolved" --arg version "$agy_version" --argjson quota "$quota" --argjson denied "$denied" --argjson checks "$checks" --arg override "${REVIEW_BUDGET_OVERRIDE:-}" --arg truncation "$truncation" \
+  '. + {reviewer_metadata:({owner:$owner,authors:$authors,author_models:$author_models,task:$task,wrapper_revision:$wrev,cli:"agy",cli_version:$version,requested_model:$requested,preflight_selected_model:$selected,resolved_models:($resolved|split(",")),conversation_id:.conversation_id,quota_remaining_before:$quota,denied_tool_calls:$denied,mechanical_checks:$checks} + (if $override == "" then {} else {budget_override:$override} end) + (if $truncation == "" then {} else {truncation_warning:$truncation} end))}' <<< "$result" > "$tmp/final.json" || fail 70 "Gemini response was not valid JSON"
 chmod 444 "$tmp/final.json"; mv "$tmp/final.json" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output" "$output.sha256"; [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "Gemini artifact or checksum was not created"; print "captured $output"

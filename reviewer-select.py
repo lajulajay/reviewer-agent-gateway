@@ -12,9 +12,11 @@ ROOT = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("review_budget", ROOT / "review-budget.py")
 budget = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(budget)
+_spec = importlib.util.spec_from_file_location("agents", ROOT / "agents.py")
+agents = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(agents)
 
 SUBSCRIPTION_REVIEWERS = ("claude", "codex", "kimi")
-OWNERS = ("claude", "codex")
 
 
 def _string_list(value, label):
@@ -75,16 +77,27 @@ def _latest_eligible(topic_rounds, available):
     return provider if provider in available else None
 
 
-def order(policy_path, owner, output, today=None, authors=()):
-    """Return provider names in invocation order for an auto-* output path."""
-    if owner not in OWNERS:
-        raise ValueError("owner must be codex or claude")
-    if any(author not in SUBSCRIPTION_REVIEWERS for author in authors):
-        raise ValueError("authors may contain only claude, codex, and kimi")
+def _independent(registry, provider, owner, authors, author_models):
+    try:
+        agents.check(registry, provider, owner, authors, author_models)
+        return True
+    except agents.IdentityError:
+        return False
+
+
+def order(policy_path, owner, output, today=None, authors=(), author_models=(), registry=None):
+    """Return provider names in invocation order for an auto-* output path.
+
+    A provider is eligible only if no vendor it runs is the vendor of the
+    owner, an additional author, or any authoring model (agents.json).
+    """
+    registry = registry or agents.load()
+    # Validates owner, authors, and author models; raises IdentityError (a ValueError).
+    agents.excluded_vendors(registry, owner, authors, author_models)
     output = Path(output)
     active, tie_order = load_roster(Path(policy_path))
-    excluded = {owner, *authors}
-    eligible = [provider for provider in tie_order if provider in active and provider not in excluded]
+    eligible = [provider for provider in tie_order
+                if provider in active and _independent(registry, provider, owner, authors, author_models)]
     if not eligible:
         raise ValueError("no eligible active subscription reviewer; use gemini-review.sh")
     if not output.parent.is_dir():
@@ -113,12 +126,18 @@ def order(policy_path, owner, output, today=None, authors=()):
 
 def main(argv):
     if len(argv) < 4:
-        print("usage: reviewer-select.py ROSTER_JSON <codex|claude> AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...]", file=sys.stderr)
+        print("usage: reviewer-select.py ROSTER_JSON OWNER AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...] [--author-model=MODEL...]", file=sys.stderr)
         return 64
+    extra = argv[4:]
+    authors = [a for a in extra if not a.startswith("--author-model=")]
+    models = [a.split("=", 1)[1] for a in extra if a.startswith("--author-model=")]
     try:
-        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=argv[4:]):
+        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=authors, author_models=models):
             print(provider)
         return 0
+    except agents.IdentityError as exc:
+        print(f"reviewer selection error: {exc}", file=sys.stderr)
+        return 64
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(f"reviewer selection error: {exc}", file=sys.stderr)
         return 78

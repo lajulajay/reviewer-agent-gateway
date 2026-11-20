@@ -29,6 +29,9 @@ REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Kimi review")
 FINDING = re.compile(r"^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
 CONDITION = re.compile(r"^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
 VALIDATOR = GATEWAY / "reviewer-validate.py"
+_spec = __import__("importlib.util").util.spec_from_file_location("agents", GATEWAY / "agents.py")
+agents = __import__("importlib.util").util.module_from_spec(_spec)
+_spec.loader.exec_module(agents)
 ROW_ID = re.compile(r"^R(\d+)-([FC]\d+)$")
 CLOSURE = "raw review compared with its rows; no unlabeled actionable item"
 MAX_OBSERVATION_AGE = 2 * 3600
@@ -58,6 +61,21 @@ def artifact_text(path):
             return raw
         return data.get("response") or data.get("result") or raw
     return raw
+
+
+def artifact_identity(path):
+    """Return (reviewer, owner, authors, author_models) recorded by the wrapper."""
+    reviewer = path.name.split("-", 1)[0]
+    if path.suffix == ".json":
+        try:
+            meta = json.loads(path.read_text(errors="replace")).get("reviewer_metadata") or {}
+        except json.JSONDecodeError:
+            meta = {}
+        return reviewer, meta.get("owner") or None, list(meta.get("authors") or []), list(meta.get("author_models") or [])
+    head = path.read_text(errors="replace").split("\n\n", 2)[:2]
+    fields = dict(m.groups() for m in re.finditer(r"(?m)^(Owner|Authors|Author models): (.+)$", "\n".join(head)))
+    split = lambda key: [v.strip() for v in fields.get(key, "").split(",") if v.strip()]
+    return reviewer, fields.get("Owner"), split("Authors"), split("Author models")
 
 
 def is_review_artifact(path):
@@ -315,11 +333,16 @@ def record(repo):
             errors.append("the gateway baseline records no agent cache, so the memory budget is unenforced")
         else:
             check_memory(gateway_base["agent_cache"], errors)
+    registry = agents.load()
     for wpath in workstreams(repo):
         ws = Workstream(repo, wpath)
         name = wpath.relative_to(repo)
         if not ws.header.get("Owner"):
             errors.append(f"{name}: no Owner line")
+        for value in ws.header.get("Owner", []):
+            first = re.match(r"[A-Za-z]+", value)
+            if not first or first.group(0).lower() not in agents.owners(registry):
+                errors.append(f"{name}: Owner must name one of {', '.join(agents.owners(registry))}: {value[:60]}")
         errors.extend(f"{name}: {p}" for p in ws.problems)
         for rnd, rel in sorted(ws.reviews.items()):
             art = (repo / rel)
@@ -346,6 +369,11 @@ def record(repo):
                         errors.append(f"{name}: {frel} was modified, deleted, or renamed after its first commit")
                     if len(git(repo, "log", "--format=%H", "--diff-filter=A", "--", frel)[1].split()) > 1:
                         errors.append(f"{name}: {frel} was added more than once (replaced)")
+            reviewer, owner, authors, models = artifact_identity(art)
+            try:
+                agents.check(registry, reviewer, owner, authors, models)
+            except agents.IdentityError as exc:
+                errors.append(f"{name}: r{rnd:02d} breaks reviewer independence: {exc}")
             items, dupes = labeled_items(art)
             errors.extend(f"{name}: r{rnd:02d} has duplicate label {d}" for d in dupes)
             post_adoption = arel not in legacy

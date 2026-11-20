@@ -13,8 +13,8 @@ or direct Moonshot API configuration.
 Invocation contract:
 
 ```text
-reviewer.sh [--packet-root DIR] [--owner codex|claude] MODEL PROMPT OUTPUT PACKET...
-auto-review.sh [--packet-root DIR] --owner codex|claude [--author codex|claude|kimi]... <hard|routine> PROMPT AUTO_OUTPUT PACKET...
+reviewer.sh [--packet-root DIR] [--owner AGENT] [--author AGENT]... [--author-model MODEL]... [--task ID] MODEL PROMPT OUTPUT PACKET...
+auto-review.sh [--packet-root DIR] --owner AGENT [--author AGENT]... [--author-model MODEL]... [--task ID] <hard|routine> PROMPT AUTO_OUTPUT PACKET...
 ```
 
 The target repository is derived from the output path. Inputs outside it are
@@ -28,19 +28,28 @@ review prose. Failed calls write a
 non-overwritable `.diagnostic.json` beside the requested output whenever the
 output location is usable.
 
-`--owner` names the agent that owns the work under review. It is optional for
-compatibility on direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires
-it: the Claude wrapper refuses `--owner claude`, the Codex wrapper refuses
-`--owner codex`, and every wrapper records the owner in its artifact or
-diagnostic. Automatic selection requires `--owner` and excludes that reviewer.
-For a packet with additional authors, repeat `--author` for each of them;
-automatic selection excludes every named author. Do not use automatic selection
-for mixed-authorship work unless all authors are named.
+`--owner` names the agent that owns the work under review (an owner in
+`agents.json`: Claude, Codex, or Copilot). It is optional for compatibility on
+direct provider calls but [PROTOCOL.md](PROTOCOL.md) requires it. Repeat
+`--author` for each additional authoring agent and `--author-model` for each
+model that wrote the work; `--task` records a delegated task ID. Every wrapper
+records these in its artifact and runs `agents.py check` before any model call.
 
-Active roles: Codex and Claude interchangeably own work; Kimi is reviewer-only.
+Vendor independence: `agents.json` maps each channel (CLI subscription) to the
+model vendors it runs, and model IDs to vendors by prefix. A reviewer is
+refused (exit 64) when any of its vendors is the vendor of the owner, an author,
+or an authoring model, whatever the model version: Gemini cannot review work
+written by Gemini 4 Hydrogen through Copilot; Claude cannot review Copilot work
+written by any Claude model. Copilot's vendor depends on the model, so Copilot
+ownership or authorship requires `--author-model`; routers (`auto`, Copilot
+Fusion) and unknown prefixes fail closed. Automatic selection applies the same
+rule. `docs-check.py record` re-checks every indexed artifact and every
+workstream `Owner:` line against the registry.
+
+Active roles: Claude, Codex, and Copilot own work; Kimi is reviewer-only.
 Kimi, Claude, and Codex are official reviewers when active in
 `reviewer-roster.json`, and Gemini is always the fallback reviewer, never an
-owner. Remove a reviewer from `active_reviewers` when its subscription lapses
+owner. Copilot is not yet a reviewer channel. Remove a reviewer from `active_reviewers` when its subscription lapses
 and restore it when renewed; `tie_break_order` must continue to list all three
 subscription reviewers.
 

@@ -9,26 +9,28 @@ rules. If repository wording differs from this file, this file wins.
 
 | Role | Who | Does |
 | :--- | :--- | :--- |
-| Owner | Codex **or** Claude, assigned by the user per workstream | Investigates, implements, tests, and commits/pushes/deploys within the user's escalation boundary |
+| Owner | Claude, Codex, or Copilot, assigned by the user per workstream | Investigates, implements, tests, and commits/pushes/deploys within the user's escalation boundary |
 | Official reviewers | Active Kimi, Claude, and Codex reviewers other than the owner | Read-only adversarial review of substantive work |
 | Fallback reviewer | Gemini, always | Read-only review when no eligible subscription reviewer is available or a decision-material disagreement remains unresolved |
 
-Codex and Claude are interchangeable owners; neither is the default. Kimi and
-Gemini are reviewer-only and never own work.
+Claude, Codex, and Copilot are interchangeable owners; none is the default.
+Kimi and Gemini are reviewer-only and never own work. `agents.json` is the
+registry of agents and the model vendors each one runs.
 
 - **Recording the owner.** Each workstream file in the repository's
-  `workstreams/` starts with an `Owner: Codex` or `Owner: Claude` line
+  `workstreams/` starts with an `Owner: <agent>` line
   (legacy `COLLAB.md` entries before adoption kept theirs). Only the
   user assigns or changes the owner. A change is recorded as a new dated line,
   e.g. `Owner: Claude (from Codex, 2026-10-03, Codex limit reached)`; earlier
   entries are never rewritten.
-- **No self-review.** A change is reviewed only by an agent that did not
-  author it. Pass `--owner codex|claude` on every reviewer call: automatic
-  selection excludes the owner; for mixed-authorship packets, pass one
-  `--author codex|claude|kimi` per additional author so automatic selection
-  excludes them too. The Claude wrapper refuses `--owner claude`,
-  the Codex wrapper refuses `--owner codex`, and every wrapper records the
-  owner in its artifact.
+- **No self-review, by vendor.** No model vendor reviews work it owns or
+  wrote, whatever the model version (user decision 2026-11-20). Pass
+  `--owner` on every reviewer call, one `--author` per additional agent, and
+  one `--author-model` per model that wrote the work; Copilot ownership or
+  authorship requires `--author-model`, and a router such as Copilot Fusion
+  may not author reviewed work. Every wrapper and automatic selection refuse
+  a reviewer that shares a vendor with any of them, and record the identity
+  in the artifact.
 - **Subscription roster.** `reviewer-roster.json` lists the currently active
   Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
   or lapses; automatic selection never chooses an inactive reviewer. Gemini is
@@ -63,17 +65,17 @@ Run from the repository root through the repository's `reviewers/` shims,
 which delegate to this gateway:
 
 ```bash
-reviewers/claude-review.sh --owner codex  <sonnet|opus>    <prompt> .collab/claude-YYYY-MM-DD-topic.md <packet>...
-reviewers/codex-review.sh  --owner claude <routine|hard>   <prompt> .collab/codex-YYYY-MM-DD-topic.md  <packet>...
-reviewers/kimi-review.sh   --owner <codex|claude> <hard|routine> <prompt> .collab/kimi-YYYY-MM-DD-topic.md <packet>...
-reviewers/auto-review.sh   --owner <codex|claude> <hard|routine> <prompt> .collab/auto-YYYY-MM-DD-topic.md <packet>...
-reviewers/gemini-review.sh --owner <codex|claude> <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
+reviewers/claude-review.sh --owner <agent> [--author-model M]... <sonnet|opus>    <prompt> .collab/claude-YYYY-MM-DD-topic.md <packet>...
+reviewers/codex-review.sh  --owner <agent> [--author-model M]... <routine|hard>   <prompt> .collab/codex-YYYY-MM-DD-topic.md  <packet>...
+reviewers/kimi-review.sh   --owner <agent> [--author-model M]... <hard|routine> <prompt> .collab/kimi-YYYY-MM-DD-topic.md <packet>...
+reviewers/auto-review.sh   --owner <agent> [--author-model M]... <hard|routine> <prompt> .collab/auto-YYYY-MM-DD-topic.md <packet>...
+reviewers/gemini-review.sh --owner <agent> [--author-model M]... <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
 ```
 
 Add `--packet-root <dir>` to use a shared prompt or packet from outside the
 repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
 before the model or tier. For automatic selection of mixed-authorship work,
-repeat `--author <codex|claude|kimi>` for every author besides the owner.
+repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
 
 For automatic selection, the `auto-` output name is a template; the artifact
 uses the chosen provider's prefix. New topics go to the active, non-owner
