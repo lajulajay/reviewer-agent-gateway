@@ -62,7 +62,8 @@ def redact(text):
     text = str(text)
     for s in _SECRET:
         if s:
-            text = text.replace(s, "[REDACTED]")
+            for form in (s, json.dumps(s)[1:-1]):
+                text = text.replace(form, "[REDACTED]")
     return text
 
 
@@ -116,8 +117,8 @@ def committed(lines):
             continue
         try:
             e = json.loads(line)
-            amount = int(e["micro_usd"])
-            if amount < 0 or e["kind"] not in ("reserve", "settle"):
+            amount = e["micro_usd"]
+            if type(amount) is not int or amount < 0 or e["kind"] not in ("reserve", "settle"):
                 raise ValueError
             (reserved if e["kind"] == "reserve" else settled)[e["id"]] = amount
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
@@ -132,10 +133,24 @@ def append(fh, entry):
     os.fsync(fh.fileno())
 
 
+def _fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def reserve(cfg, tier, bound):
+    created_dir = not STATE.exists()
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if created_dir:
+        _fsync_dir(STATE.parent)
+    created_file = not ledger_path(cfg).exists()
     call_id = uuid.uuid4().hex
     with ledger_path(cfg).open("a+") as fh:
+        if created_file:
+            _fsync_dir(STATE)
         fcntl.flock(fh, fcntl.LOCK_EX)
         fh.seek(0)
         already = committed(fh.read().splitlines())
@@ -206,7 +221,7 @@ def parse(cfg, data):
         problem = f"{len(choices)} choices returned; exactly one is required"
     for ch in choices:
         msg = ch.get("message") or {}
-        has_tool = bool(msg.get("tool_calls")) or msg.get("function_call") is not None \
+        has_tool = bool(msg.get("tool_calls")) or "function_call" in msg \
             or ch.get("finish_reason") in ("tool_calls", "function_call")
         if has_tool:
             problem = "tool call in reply"
@@ -246,29 +261,38 @@ def run(argv):
     except urllib.error.HTTPError as exc:
         released = exc.code in UNBILLED_HTTP
         settle(cfg, call_id, 0 if released else bound, f"HTTP {exc.code}")
+        detail = ""
         try:
-            detail = exc.read()[:300].decode(errors="replace")
+            err = json.loads(exc.read()[:4000]).get("error")
+            if isinstance(err, dict):
+                parts = [str(err.get(k))[:40] for k in ("type", "code") if isinstance(err.get(k), (str, int))]
+                detail = " (" + ", ".join(parts) + ")" if parts else ""
         except Exception:
-            detail = "(unreadable body)"
-        raise Refusal(70, f"API request failed: HTTP {exc.code}: {detail}"
+            pass  # the body is never echoed: it is untrusted and may quote the request
+        raise Refusal(70, f"API request failed: HTTP {exc.code}{detail}"
                           + ("" if released else "; full reservation kept"))
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         raise Refusal(70, f"API request failed ({type(exc).__name__}); full reservation kept")
     reply, problem, tin, tout, served = parse(cfg, data)
-    usage_ok = all(isinstance(v, int) and v >= 0 for v in (tin, tout))
-    cost = micro(tin, tout, cfg) if usage_ok else bound
-    settle(cfg, call_id, cost, "usage" if usage_ok else "usage missing: charged the full bound")
+    if not problem and not reply.strip():
+        problem = "no text in reply"
+    usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
+    if problem:
+        cost, note = bound, f"reply rejected ({problem}): full bound kept"
+    elif usage_ok:
+        cost, note = micro(tin, tout, cfg), "usage"
+    else:
+        cost, note = bound, "usage missing: charged the full bound"
+    settle(cfg, call_id, cost, note)
     meta = {"route": "api", "endpoint": url, "selected_model": cfg["model"], "served_model": served,
             "reasoning_effort": cfg["effort"], "input_tokens": tin, "output_tokens": tout,
             "cost_usd": cost / MICRO, "ledger_committed_usd": (already + cost) / MICRO,
             "spend_cap_usd": cfg["cap_micro"] / MICRO, "problem": problem,
             "elapsed_seconds": round(time.time() - start, 1)}
-    Path(out_meta).write_text(json.dumps(meta))
+    Path(out_meta).write_text(redact(json.dumps(meta)))
     if problem:
         raise Refusal(70, f"API reply rejected: {problem}")
-    if not reply.strip():
-        raise Refusal(70, "API returned no text")
-    Path(out_text).write_text(reply)
+    Path(out_text).write_text(redact(reply))
     return 0
 
 

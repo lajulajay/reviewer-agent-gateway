@@ -49,6 +49,7 @@ are in the proposal. No production service is changed.
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Codex API (`gpt-6.1-sol`) | hard; first review of the spend-capped API route, which handles keys and money | `.collab/codex-2026-11-20-api-route-r01.md` (SHA-256 `cd7f8ffcfa4b0777932fa480de1f66e9fc97d808b7ed3fa84c8168e720348241`) | REJECT |
+| r03 | Codex API (`gpt-6.1-terra`) | routine; follow-up of r01 (file name `-r02`) | `.collab/codex-2026-11-20-api-route-r02.md` (SHA-256 `5806cc886f55296e7f064d693ec5808d7712fb51533852c092b867d2991ac8fb`) | REJECT |
 | r02 | Gemini (`gemini-3.8-flash-high`) | hard; changes who may review whom in every repository | `.collab/gemini-2026-11-20-copilot-owner-phase1-r02.json` (SHA-256 `99fec6f5c65f9d9c90020c7a80c2573439345f22930beb35dc125ab18a612fe7`) | ACCEPT WITH CONDITIONS |
 
 r01 (`.collab/gemini-2026-11-20-copilot-owner-phase1-r01.diagnostic.json`) was
@@ -59,18 +60,27 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | blocker | | open: redirects refused (`_NoRedirect`), reply host checked; tests added; awaiting r02 |
-| R01-F2 | major | | open: `keychain-store.py` stores via the Security framework (no argv/env); README updated; awaiting r02 |
-| R01-F3 | major | | open: all output redacted, key validated without echo, no tracebacks; tests added; awaiting r02 |
-| R01-F4 | blocker | | open: bound = every UTF-8 body byte + 1,024 framing tokens; test added; awaiting r02 |
-| R01-F5 | blocker | | open: locked, fsynced reserve-then-settle ledger; crash keeps reservation; concurrency test; awaiting r02 |
-| R01-F6 | blocker | | open: failures and missing usage keep the full reservation; only 400/401/403/404/422 release; awaiting r02 |
-| R01-F7 | major | | open: finite positive numbers, integer micro-dollars rounded up, malformed ledger refuses, fixed ledger location; awaiting r02 |
-| R01-F8 | major | | open: send marker drives exit codes and Kimi `model_invocation_began`; post-send steps fail 70; smoke cases; awaiting r02 |
-| R01-F9 | major | | open: complete-reply checks, exactly one choice, `function_call` and tool finish reasons rejected; awaiting r02 |
-| R01-F10 | major | | open: 16 unit tests and API-branch smoke cases (which also caught a `$0`-in-function path bug); awaiting r02 |
-| R01-F11 | minor | | open: README and PROTOCOL rewritten to match; roster wording covers API reviewers; awaiting r02 |
+| R01-F1 | blocker | verified r03 | resolved |
+| R01-F2 | major | | open: `keychain-store.py` stores via the Security framework (no argv/env); README updated; remainder tracked as R03-F1 |
+| R01-F3 | major | | open: all output redacted, key validated without echo, no tracebacks; tests added; remainder tracked as R03-F2 |
+| R01-F4 | blocker | verified r03 | resolved |
+| R01-F5 | blocker | | open: locked, fsynced reserve-then-settle ledger; crash keeps reservation; concurrency test; remainder tracked as R03-F3 |
+| R01-F6 | blocker | | open: failures and missing usage keep the full reservation; only 400/401/403/404/422 release; remainder tracked as R03-F4 |
+| R01-F7 | major | | open: finite positive numbers, integer micro-dollars rounded up, malformed ledger refuses, fixed ledger location; remainder tracked as R03-F5 |
+| R01-F8 | major | | open: send marker drives exit codes and Kimi `model_invocation_began`; post-send steps fail 70; smoke cases; remainder tracked as R03-F6, R03-F7 |
+| R01-F9 | major | | open: complete-reply checks, exactly one choice, `function_call` and tool finish reasons rejected; remainder tracked as R03-F8 |
+| R01-F10 | major | verified r03 | resolved |
+| R01-F11 | minor | | open: README and PROTOCOL rewritten to match; roster wording covers API reviewers; remainder tracked as R03-F4 |
 | R01-C1 | condition | | open: model, price and reasoning-token semantics need sponsor confirmation from first-party pages |
+| R03-F1 | major | | open: keychain-store refuses non-tty input and the getpass echo fallback; awaiting r04 |
+| R03-F2 | major | | open: error bodies never echoed (only error type/code); JSON-escaped key redacted; reply and metadata redacted before writing; awaiting r04 |
+| R03-F3 | major | | open: state directory and new ledger file are directory-fsynced on creation; awaiting r04 |
+| R03-F4 | major | | open: reply validated before settling; rejected replies keep the full bound; test added; awaiting r04 |
+| R03-F5 | major | | open: ledger amounts must be JSON integers >= 0 (bool, float, string refused); test added; awaiting r04 |
+| R03-F6 | major | | open: prompt assembly and artifact values checked step by step; awaiting r04 |
+| R03-F7 | minor | | open: exit 0 without marker maps to 78; smoke case added; awaiting r04 |
+| R03-F8 | minor | | open: any present `function_call`, even null, is a tool call (live Moonshot replies carry none); test added; awaiting r04 |
+| R03-C1 | condition | | open: same as R01-C1; Moonshot evidence: reasoning tokens are inside `completion_tokens` and `max_tokens` |
 | R02-F1 | minor | fixed 605cdc0 | proposal moves task-table checks to Phase 3 with the template; pending push |
 | R02-F2 | minor | fixed 605cdc0 | PROTOCOL synopses list `--author` and `--task`; pending push |
 | R02-C1 | condition | | open: fixed in 605cdc0; no Gemini quota for a check round, awaiting sponsor acceptance |
@@ -98,3 +108,4 @@ the lowered floor (see Decisions) and left the weekly Gemini quota at 0.
   blockers on key confinement and spend accounting. All addressed in the next
   commit; ledgers migrated to the reserve/settle format (pre-migration copies
   kept beside them). Follow-up r02 to verify.
+- 2026-11-20: Codex r02 (indexed r03): R01-F1, F4, F10 resolved; eight narrower findings fixed. Manual Moonshot reply-shape probe ($0.0002) entered in the ledger by hand.

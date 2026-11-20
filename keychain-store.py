@@ -16,6 +16,7 @@ import getpass
 import os
 import subprocess
 import sys
+import warnings
 
 ERR_DUPLICATE = -25299
 
@@ -25,7 +26,16 @@ def main(argv):
         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
         return 64
     service, account = argv[1].encode(), os.environ.get("USER", "").encode()
-    secret = getpass.getpass(f"Key for {argv[1]} (input hidden): ").strip().encode()
+    if not sys.stdin.isatty():
+        print("run this in an interactive terminal so the key is read with echo off", file=sys.stderr)
+        return 65
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)  # never fall back to echoed input
+        try:
+            secret = getpass.getpass(f"Key for {argv[1]} (input hidden): ").strip().encode()
+        except getpass.GetPassWarning:
+            print("cannot turn off terminal echo; refusing to read the key", file=sys.stderr)
+            return 65
     if not secret or not all(33 <= b < 127 for b in secret):
         print("refusing an empty key or one with spaces or non-ASCII characters", file=sys.stderr)
         return 65

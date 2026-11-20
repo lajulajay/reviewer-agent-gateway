@@ -137,7 +137,11 @@ class ApiCallTest(unittest.TestCase):
         err = urllib.error.HTTPError("u", 401, "no", {}, body)
         self.assertEqual(self.call(policy(), err), 70)
         self.assertNotIn(SECRET, self.err)
-        self.assertIn("[REDACTED]", self.err)
+        self.assertNotIn("bad key", self.err)  # untrusted error bodies are never echoed
+
+    def test_json_escaped_secret_is_redacted(self):
+        api._SECRET[:] = ['sk-a"b']
+        self.assertEqual(api.redact('{"k": "sk-a\\"b"}'), '{"k": "[REDACTED]"}')
 
     def test_malformed_key_refused_before_send_without_echo(self):
         bad = "sk-bad\nkey"
@@ -218,6 +222,8 @@ class ApiCallTest(unittest.TestCase):
                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
             ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "function_call": {}}}],
                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
+            ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "function_call": None}}],
+                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
             ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "tool_calls": [], "function_call": {}}}],
                                   "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
             ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "a"}},
@@ -228,6 +234,17 @@ class ApiCallTest(unittest.TestCase):
             with self.subTest(style=style, reply=str(reply)[:60]):
                 self.assertEqual(self.call(policy(style), reply), 70)
                 self.assertFalse((self.base / "out.md").exists())
+
+    def test_rejected_reply_keeps_full_bound_even_with_zero_usage(self):
+        self.assertEqual(self.call(policy(), openai_reply(text="", usage=(0, 0))), 70)
+        self.assertEqual(self.committed(), self.bound())
+
+    def test_fractional_ledger_amount_refuses(self):
+        api.STATE.mkdir(parents=True)
+        for amount in (-0.5, 1.5, True, "3"):
+            (api.STATE / "api-spend-test.jsonl").write_text(json.dumps({"kind": "settle", "id": "a", "micro_usd": amount}) + "\n")
+            self.assertEqual(self.call(policy(), openai_reply()), 78)
+        self.assertEqual(self.sent, [])
 
     def test_unknown_tier_refuses_before_send(self):
         self.assertEqual(self.call(policy(), openai_reply(), tier="routine"), 78)

@@ -1,0 +1,1000 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index d3145e4..ac65b6e 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -31,13 +31,14 @@ registry of agents and the model vendors each one runs.
+   may not author reviewed work. Every wrapper and automatic selection refuse
+   a reviewer that shares a vendor with any of them, and record the identity
+   in the artifact.
+-- **Subscription roster.** `reviewer-roster.json` lists the currently active
+-  Claude, Codex, and Kimi subscriptions. Update it when a subscription starts
+-  or lapses; automatic selection never chooses an inactive reviewer. Gemini is
++- **Reviewer roster.** `reviewer-roster.json` lists the Claude, Codex, and
++  Kimi reviewers currently usable by subscription or API. Update it when
++  access starts or lapses; automatic selection never chooses an inactive reviewer. Gemini is
+   deliberately absent because it is fallback-only. Codex and Kimi may run on
+   a paid API instead of a subscription (`"route": "api"` in their model
+-  policy): keys live in the macOS Keychain, and each call is refused before
+-  it is sent if it could push recorded spend past the policy's cap (exit 79).
++  policy): keys live in the macOS Keychain, and each call reserves its bound
++  cost and is refused before sending if spend plus open reservations could
++  pass the policy's cap (exit 79).
+   Raising a cap or switching a route is the user's decision.
+ - **Ownership changes mid-workstream.** After a handoff, the new owner's
+   changes go to another eligible reviewer as usual. For a packet that mixes
+diff --git a/README.md b/README.md
+index 4b718e6..e3c07b3 100644
+--- a/README.md
++++ b/README.md
+@@ -208,28 +208,46 @@ test.
+ `codex-model-policy.json` and `kimi-model-policy.json` carry a `route`:
+ `subscription` (the CLI paths described above) or `api`. On the API route the
+ wrapper keeps every shared check (identity and vendor rule, output naming,
+-review budget, packet safety, output contract, checksums) and replaces only
+-the model call with `api-call.py`:
+-
+-- one tool-free request (`/responses` for OpenAI with `tools: []` and
+-  `store: false`; `/chat/completions` for Moonshot), and any tool item in the
+-  reply fails the review;
+-- the key is read from the Keychain item named by `keychain_service`
+-  (`reviewer-gateway-openai`, `reviewer-gateway-moonshot`) inside the process
+-  and sent only in the Authorization header;
+-- before sending, recorded spend plus the worst case (all input at ~3
+-  characters per token plus `max_output_tokens`, at the policy's list prices)
+-  must fit `spend_cap_usd`, else exit 79; afterwards the actual cost from
+-  reported usage (worst case when usage is missing) is appended to
+-  `~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl`, outside every
+-  repository;
+-- the artifact records `Route: api`, the served model, token usage and cost.
+-
+-Store a key without exposing it in shell history:
+-`read -rs "k?key: " && security add-generic-password -U -a "$USER" -s <service> -w "$k"; unset k`
+-(the Keychain's own prompt truncates input at 128 characters, which breaks
+-OpenAI project keys). Exit 78 means a missing key or policy before any
+-request; 70 means the request was sent and failed.
++review budget, packet safety, output contract, checksums, gateway provenance)
++and replaces only the model call with `api-call.py`:
++
++- **One tool-free request** to the policy's https host: OpenAI `/responses`
++  (`tools: []`, `store: false`) or Moonshot `/chat/completions` (`n: 1`).
++  The review is accepted only from a complete reply (`status: completed`, or
++  exactly one choice with `finish_reason: stop`) with no tool item, tool
++  call, or function call; anything else fails with exit 70.
++- **Key handling.** The key is read from the Keychain item named by
++  `keychain_service` inside the process, checked for printable ASCII without
++  being echoed, and sent only in the Authorization header. Redirects are
++  refused and a reply from another host is rejected. Every message the script
++  prints is redacted, and unexpected exceptions print no traceback.
++- **Spend cap.** Under an exclusive lock on the ledger, the call reserves its
++  bound before sending: every UTF-8 byte of the request body counted as one
++  input token (tokenizers emit at most one token per byte) plus 1,024 framing
++  tokens and `max_output_tokens`, at the policy's list prices, rounded up to
++  the micro-dollar. It is refused (exit 79) unless settled spend plus open
++  reservations plus that bound fit `spend_cap_usd`. The reservation is then
++  settled at the reported usage. It is released to zero only for HTTP 400,
++  401, 403, 404 and 422 (the provider rejected the request); missing usage,
++  429, 5xx, transport errors, malformed replies and crashes keep the full
++  reservation. The ledger is
++  `~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl` (fixed location,
++  outside every repository; a malformed line refuses all calls rather than
++  guessing). Output ceilings include reasoning tokens on both APIs as
++  documented by the providers; confirm when changing models.
++- **Exit codes.** `api-call.py` creates a marker immediately before sending.
++  Without the marker, the wrapper exits 64, 78 or 79 (nothing was sent; the
++  dispatcher may fail over). With it, any failure is 70 (the request may have
++  reached the model and counts), and Kimi's diagnostic sets
++  `model_invocation_began` from the same marker.
++- The artifact records `Route: api`, the served model, token usage and cost.
++
++Store or replace a key with `python3 keychain-store.py <service>`
++(`reviewer-gateway-openai`, `reviewer-gateway-moonshot`). It prompts with
++echo off and writes through the Security framework, so the key never appears
++in argv, the environment or shell history. (`security add-generic-password
++-w` truncates typed input at 128 characters, and passing the key as its
++argument exposes it in the process list.)
+ 
+ ## Gemini reviews through Antigravity CLI
+ 
+diff --git a/api-call.py b/api-call.py
+index b5de85f..6d6703e 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -1,40 +1,76 @@
+ #!/usr/bin/env python3
+ """One tool-free review call through a provider's HTTP API, with a spend cap.
+ 
+-  api-call.py POLICY_JSON TIER PROMPT_FILE OUT_TEXT OUT_META
++  api-call.py POLICY_JSON TIER PROMPT_FILE OUT_TEXT OUT_META SENT_MARKER
+ 
+ POLICY_JSON's "api" object names the endpoint style ("openai-responses" or
+-"chat-completions"), base URL, Keychain service holding the key, spend cap
+-and ledger name, and per-tier model, effort, max output tokens and prices
+-(USD per 1M tokens). The key is read from the macOS Keychain inside this
+-process and sent only in the Authorization header; it is never written to
+-disk, argv, logs or artifacts. No tools are offered to the model.
+-
+-Before the call, the worst case (all input + max output tokens at list price)
+-plus the ledger's recorded spend must stay within the cap. After the call the
+-actual cost from reported usage is appended to the ledger
+-(~/.local/state/reviewer-gateway/api-spend-<ledger>.jsonl, outside any repo).
+-
+-Exit: 0 ok; 64 usage; 78 not configured / key missing (before any request);
+-79 spend cap refusal (before any request); 70 request sent but failed.
++"chat-completions"), https base URL, Keychain service holding the key, spend
++cap and ledger name, and per-tier model, effort, max output tokens and list
++prices (USD per 1M tokens). No tools are offered to the model.
++
++Key handling: read from the macOS Keychain inside this process, validated
++without being echoed, sent only in the Authorization header of one request to
++the configured host. Redirects are refused, and every message this script
++emits is redacted.
++
++Spend cap: under an exclusive lock on the ledger, the full bound for this call
++(every UTF-8 byte of the request body as one input token, plus max output
++tokens, at list price) is reserved before sending, and only if all recorded
++spend and open reservations plus that bound fit the cap. After the reply the
++reservation is settled at the reported usage. It is released to zero only for
++HTTP 400/401/403/404/422, where the provider rejected the request before any
++generation; every other failure, crash or missing usage keeps the full
++reservation. The ledger lives in ~/.local/state/reviewer-gateway, outside
++every repository.
++
++SENT_MARKER is created immediately before the request is sent, so the caller
++knows whether the model may have been reached.
++
++Exit: 0 ok; 64 usage; 78 refused before sending (policy, key, ledger, local
++error); 79 spend cap refusal; 70 the request may have been sent and the review
++failed.
+ """
+ 
++import fcntl
+ import json
++import math
+ import os
+ import subprocess
+ import sys
+ import time
+ import urllib.error
++import urllib.parse
+ import urllib.request
++import uuid
+ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+-STATE = Path(os.environ.get("REVIEWER_API_STATE_DIR", Path.home() / ".local/state/reviewer-gateway"))
++STATE = Path.home() / ".local/state/reviewer-gateway"
++MICRO = 1_000_000  # ledger amounts are integer micro-dollars, rounded up
++FRAMING_TOKENS = 1024  # request/message framing allowance on top of the body
++UNBILLED_HTTP = (400, 401, 403, 404, 422)
++_SECRET = []
++
++
++class Refusal(Exception):
++    def __init__(self, code, msg):
++        super().__init__(msg)
++        self.code = code
++
+ 
++def redact(text):
++    text = str(text)
++    for s in _SECRET:
++        if s:
++            text = text.replace(s, "[REDACTED]")
++    return text
+ 
+-def die(code, msg):
+-    print(msg, file=sys.stderr)
+-    sys.exit(code)
++
++def _positive(value, label, allow_zero=False):
++    v = float(value)
++    if not math.isfinite(v) or v < 0 or (v == 0 and not allow_zero):
++        raise ValueError(f"{label} must be a finite {'non-negative' if allow_zero else 'positive'} number")
++    return v
+ 
+ 
+ def load(policy_path, tier):
+@@ -44,46 +80,104 @@ def load(policy_path, tier):
+         cfg = {
+             "style": api["style"], "base_url": api["base_url"].rstrip("/"),
+             "keychain_service": api["keychain_service"], "ledger": api["ledger"],
+-            "spend_cap_usd": float(api["spend_cap_usd"]), "model": t["model"],
+-            "effort": t.get("reasoning_effort"), "max_output_tokens": int(t["max_output_tokens"]),
+-            "usd_in": float(t["usd_per_1m_input"]), "usd_out": float(t["usd_per_1m_output"]),
++            "cap_micro": math.floor(_positive(api["spend_cap_usd"], "spend_cap_usd") * MICRO),
++            "model": t["model"], "effort": t.get("reasoning_effort"),
++            "max_output_tokens": int(_positive(t["max_output_tokens"], "max_output_tokens")),
++            "usd_in": _positive(t["usd_per_1m_input"], "usd_per_1m_input"),
++            "usd_out": _positive(t["usd_per_1m_output"], "usd_per_1m_output"),
+         }
+     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+-        die(78, f"API review policy is incomplete for tier {tier!r}: {exc}")
++        raise Refusal(78, f"API review policy is incomplete for tier {tier!r}: {exc}")
+     if cfg["style"] not in ("openai-responses", "chat-completions"):
+-        die(78, f"unknown API style {cfg['style']!r}")
+-    if not cfg["base_url"].startswith("https://"):
+-        die(78, "API base_url must be https")
++        raise Refusal(78, f"unknown API style {cfg['style']!r}")
++    url = urllib.parse.urlsplit(cfg["base_url"])
++    if url.scheme != "https" or not url.hostname:
++        raise Refusal(78, "API base_url must be an https URL with a host")
++    if not cfg["ledger"].replace("-", "").isalnum():
++        raise Refusal(78, "ledger name must be alphanumeric")
++    cfg["host"] = url.hostname
+     return cfg
+ 
+ 
++def micro(tokens_in, tokens_out, cfg):
++    """Cost in micro-dollars, rounded up."""
++    return math.ceil(tokens_in * cfg["usd_in"] + tokens_out * cfg["usd_out"])
++
++
+ def ledger_path(cfg):
+     return STATE / f"api-spend-{cfg['ledger']}.jsonl"
+ 
+ 
+-def spent(cfg):
+-    path = ledger_path(cfg)
+-    if not path.exists():
+-        return 0.0
+-    total = 0.0
+-    for line in path.read_text().splitlines():
+-        if line.strip():
+-            total += float(json.loads(line)["cost_usd"])
+-    return total
++def committed(lines):
++    """Micro-dollars spent or reserved: settled amounts, else open reservations."""
++    reserved, settled = {}, {}
++    for n, line in enumerate(lines, 1):
++        if not line.strip():
++            continue
++        try:
++            e = json.loads(line)
++            amount = int(e["micro_usd"])
++            if amount < 0 or e["kind"] not in ("reserve", "settle"):
++                raise ValueError
++            (reserved if e["kind"] == "reserve" else settled)[e["id"]] = amount
++        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
++            raise Refusal(78, f"ledger line {n} is malformed; refusing to guess spend")
++    return sum(settled.get(i, amount) for i, amount in reserved.items()) + \
++        sum(a for i, a in settled.items() if i not in reserved)
++
++
++def append(fh, entry):
++    fh.write(json.dumps(entry) + "\n")
++    fh.flush()
++    os.fsync(fh.fileno())
++
++
++def reserve(cfg, tier, bound):
++    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
++    call_id = uuid.uuid4().hex
++    with ledger_path(cfg).open("a+") as fh:
++        fcntl.flock(fh, fcntl.LOCK_EX)
++        fh.seek(0)
++        already = committed(fh.read().splitlines())
++        if already + bound > cfg["cap_micro"]:
++            raise Refusal(79, f"API spend cap: ${already / MICRO:.4f} spent or reserved + ${bound / MICRO:.4f} bound "
++                              f"exceeds the ${cfg['cap_micro'] / MICRO:.2f} cap for {cfg['ledger']}; only the user may raise it")
++        append(fh, {"kind": "reserve", "id": call_id, "micro_usd": bound, "tier": tier, "model": cfg["model"],
++                    "at": datetime.now(timezone.utc).isoformat()})
++    return call_id, already
++
++
++def settle(cfg, call_id, amount, note):
++    with ledger_path(cfg).open("a") as fh:
++        fcntl.flock(fh, fcntl.LOCK_EX)
++        append(fh, {"kind": "settle", "id": call_id, "micro_usd": amount, "note": note,
++                    "at": datetime.now(timezone.utc).isoformat()})
+ 
+ 
+ def key(cfg):
+     if sys.platform != "darwin":
+-        die(78, "API reviews read keys from the macOS Keychain")
++        raise Refusal(78, "API reviews read keys from the macOS Keychain")
+     r = subprocess.run(["security", "find-generic-password", "-a", os.environ.get("USER", ""),
+                         "-s", cfg["keychain_service"], "-w"], capture_output=True, text=True)
+     k = r.stdout.strip()
+     if r.returncode != 0 or not k:
+-        die(78, f"no Keychain item {cfg['keychain_service']!r}; store the key with security add-generic-password")
++        raise Refusal(78, f"no Keychain item {cfg['keychain_service']!r}; store the key with keychain-store.py")
++    _SECRET.append(k)
++    if not all(33 <= ord(c) < 127 for c in k):
++        raise Refusal(78, f"Keychain item {cfg['keychain_service']!r} holds a malformed key (non-printable or non-ASCII characters)")
+     return k
+ 
+ 
+-def request(cfg, text):
++class _NoRedirect(urllib.request.HTTPRedirectHandler):
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        raise urllib.error.HTTPError(req.full_url, code, "redirect refused: the key is never forwarded", headers, fp)
++
++
++def opener():
++    return urllib.request.build_opener(_NoRedirect)
++
++
++def build(cfg, text):
+     if cfg["style"] == "openai-responses":
+         body = {"model": cfg["model"], "input": text, "max_output_tokens": cfg["max_output_tokens"],
+                 "store": False, "tools": []}
+@@ -91,84 +185,104 @@ def request(cfg, text):
+             body["reasoning"] = {"effort": cfg["effort"]}
+         return cfg["base_url"] + "/responses", body
+     body = {"model": cfg["model"], "messages": [{"role": "user", "content": text}],
+-            "max_tokens": cfg["max_output_tokens"]}
++            "max_tokens": cfg["max_output_tokens"], "n": 1}
+     return cfg["base_url"] + "/chat/completions", body
+ 
+ 
+ def parse(cfg, data):
+-    if cfg["style"] == "openai-responses":
+-        parts = [c.get("text", "") for item in data.get("output", []) if item.get("type") == "message"
+-                 for c in item.get("content", []) if c.get("type") == "output_text"]
+-        tools = [item.get("type") for item in data.get("output", [])
+-                 if item.get("type") not in ("message", "reasoning")]
+-        u = data.get("usage") or {}
+-        return "".join(parts), tools, u.get("input_tokens"), u.get("output_tokens"), data.get("model"), data.get("status")
+-    choice = (data.get("choices") or [{}])[0]
+-    msg = choice.get("message") or {}
+-    tools = ["tool_calls"] if msg.get("tool_calls") else []
++    """Return (text, problem, tokens_in, tokens_out, served_model); problem is None on success."""
+     u = data.get("usage") or {}
+-    return msg.get("content") or "", tools, u.get("prompt_tokens"), u.get("completion_tokens"), data.get("model"), choice.get("finish_reason")
++    if cfg["style"] == "openai-responses":
++        items = data.get("output") or []
++        tools = sorted({i.get("type") for i in items if i.get("type") not in ("message", "reasoning")})
++        text = "".join(c.get("text", "") for i in items if i.get("type") == "message"
++                       for c in i.get("content") or [] if c.get("type") == "output_text")
++        problem = (f"tool items {tools}" if tools else
++                   None if data.get("status") == "completed" else f"response status {data.get('status')!r}")
++        return text, problem, u.get("input_tokens"), u.get("output_tokens"), data.get("model")
++    choices = data.get("choices") or []
++    problem = None
++    if len(choices) != 1:
++        problem = f"{len(choices)} choices returned; exactly one is required"
++    for ch in choices:
++        msg = ch.get("message") or {}
++        has_tool = bool(msg.get("tool_calls")) or msg.get("function_call") is not None \
++            or ch.get("finish_reason") in ("tool_calls", "function_call")
++        if has_tool:
++            problem = "tool call in reply"
++        elif ch.get("finish_reason") != "stop" and problem is None:
++            problem = f"finish_reason {ch.get('finish_reason')!r}"
++    text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
++    return text, problem, u.get("prompt_tokens"), u.get("completion_tokens"), data.get("model")
+ 
+ 
+-def main(argv):
+-    if len(argv) != 6:
+-        die(64, __doc__.strip().splitlines()[2].strip())
+-    policy, tier, prompt_file, out_text, out_meta = argv[1:]
++def run(argv):
++    if len(argv) != 7:
++        raise Refusal(64, "usage: api-call.py POLICY_JSON TIER PROMPT_FILE OUT_TEXT OUT_META SENT_MARKER")
++    policy, tier, prompt_file, out_text, out_meta, marker = argv[1:]
+     cfg = load(policy, tier)
+-    text = Path(prompt_file).read_text()
+-    # Conservative token bound: ~3 characters per token for code-heavy packets.
+-    est_in = len(text) // 3 + 1
+-    worst = est_in * cfg["usd_in"] / 1e6 + cfg["max_output_tokens"] * cfg["usd_out"] / 1e6
+-    already = spent(cfg)
+-    if already + worst > cfg["spend_cap_usd"]:
+-        die(79, f"API spend cap: ${already:.2f} spent + ${worst:.2f} worst case exceeds the "
+-                f"${cfg['spend_cap_usd']:.2f} cap for {cfg['ledger']}; only the user may raise it")
+-    url, body = request(cfg, text)
+-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
+-        "Content-Type": "application/json", "Authorization": f"Bearer {key(cfg)}"})
+-    timeout = int(os.environ.get("REVIEWER_API_TIMEOUT_SECONDS", "900"))
++    try:
++        text = Path(prompt_file).read_text()
++        timeout = int(os.environ.get("REVIEWER_API_TIMEOUT_SECONDS", "900"))
++        if timeout < 1:
++            raise ValueError("timeout must be positive")
++    except (OSError, ValueError) as exc:
++        raise Refusal(78, f"cannot prepare the request: {exc}")
++    url, body = build(cfg, text)
++    payload = json.dumps(body).encode()
++    # Byte-level tokenizers emit at most one token per byte; framing is added on top.
++    bound = micro(len(payload) + FRAMING_TOKENS, cfg["max_output_tokens"], cfg)
++    secret = key(cfg)
++    req = urllib.request.Request(url, data=payload, method="POST", headers={
++        "Content-Type": "application/json", "Authorization": f"Bearer {secret}"})
++    call_id, already = reserve(cfg, tier, bound)
++    Path(marker).touch()
+     start = time.time()
+     try:
+-        with urllib.request.urlopen(req, timeout=timeout) as resp:
++        with opener().open(req, timeout=timeout) as resp:
++            if urllib.parse.urlsplit(resp.geturl()).hostname != cfg["host"]:
++                raise Refusal(70, "response came from an unexpected host; reservation kept")
+             data = json.loads(resp.read())
+     except urllib.error.HTTPError as exc:
+-        detail = exc.read()[:500].decode(errors="replace")
+-        record(cfg, tier, 0, 0, worst_case=True, note=f"HTTP {exc.code}")
+-        die(70, f"API request failed: HTTP {exc.code}: {detail}")
+-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+-        record(cfg, tier, 0, 0, worst_case=True, note=f"transport error: {exc}")
+-        die(70, f"API request failed: {exc}")
+-    reply, tools, tin, tout, served, status = parse(cfg, data)
+-    cost = record(cfg, tier, tin, tout, worst_case=tin is None or tout is None)
++        released = exc.code in UNBILLED_HTTP
++        settle(cfg, call_id, 0 if released else bound, f"HTTP {exc.code}")
++        try:
++            detail = exc.read()[:300].decode(errors="replace")
++        except Exception:
++            detail = "(unreadable body)"
++        raise Refusal(70, f"API request failed: HTTP {exc.code}: {detail}"
++                          + ("" if released else "; full reservation kept"))
++    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
++        raise Refusal(70, f"API request failed ({type(exc).__name__}); full reservation kept")
++    reply, problem, tin, tout, served = parse(cfg, data)
++    usage_ok = all(isinstance(v, int) and v >= 0 for v in (tin, tout))
++    cost = micro(tin, tout, cfg) if usage_ok else bound
++    settle(cfg, call_id, cost, "usage" if usage_ok else "usage missing: charged the full bound")
+     meta = {"route": "api", "endpoint": url, "selected_model": cfg["model"], "served_model": served,
+-            "reasoning_effort": cfg["effort"], "status": status, "input_tokens": tin, "output_tokens": tout,
+-            "cost_usd": round(cost, 6), "ledger_spent_usd": round(already + cost, 6),
+-            "spend_cap_usd": cfg["spend_cap_usd"], "tool_items": tools, "elapsed_seconds": round(time.time() - start, 1)}
++            "reasoning_effort": cfg["effort"], "input_tokens": tin, "output_tokens": tout,
++            "cost_usd": cost / MICRO, "ledger_committed_usd": (already + cost) / MICRO,
++            "spend_cap_usd": cfg["cap_micro"] / MICRO, "problem": problem,
++            "elapsed_seconds": round(time.time() - start, 1)}
+     Path(out_meta).write_text(json.dumps(meta))
+-    if tools:
+-        die(70, f"API response contained tool items {tools}; reviews must be tool-free")
++    if problem:
++        raise Refusal(70, f"API reply rejected: {problem}")
+     if not reply.strip():
+-        die(70, f"API returned no text (status {status})")
++        raise Refusal(70, "API returned no text")
+     Path(out_text).write_text(reply)
+     return 0
+ 
+ 
+-def record(cfg, tier, tin, tout, worst_case=False, note=None):
+-    """Append the call's cost to the ledger; unknown usage is charged at the worst case."""
+-    if worst_case:
+-        cost = cfg["max_output_tokens"] * cfg["usd_out"] / 1e6 + (tin or 0) * cfg["usd_in"] / 1e6
+-        if note and note.startswith("HTTP 4"):
+-            cost = 0.0  # rejected before generation (auth, validation, quota)
+-    else:
+-        cost = tin * cfg["usd_in"] / 1e6 + tout * cfg["usd_out"] / 1e6
+-    STATE.mkdir(parents=True, exist_ok=True)
+-    entry = {"at": datetime.now(timezone.utc).isoformat(), "tier": tier, "model": cfg["model"],
+-             "input_tokens": tin, "output_tokens": tout, "cost_usd": round(cost, 6), "estimated": worst_case}
+-    if note:
+-        entry["note"] = note
+-    with ledger_path(cfg).open("a") as fh:
+-        fh.write(json.dumps(entry) + "\n")
+-    return cost
++def main(argv):
++    marker = Path(argv[6]) if len(argv) == 7 else None
++    try:
++        return run(argv)
++    except Refusal as exc:
++        print(redact(exc), file=sys.stderr)
++        return exc.code
++    except Exception as exc:  # never leak a traceback that might carry the key
++        sent = marker is not None and marker.exists()
++        print(redact(f"API review error ({type(exc).__name__}): {exc}"), file=sys.stderr)
++        return 70 if sent else 78
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/api-route.sh b/api-route.sh
+index d7a54cf..e8743de 100644
+--- a/api-route.sh
++++ b/api-route.sh
+@@ -1,41 +1,45 @@
+ # Sourced by codex-review.sh and kimi-review.sh when their model policy sets
+ # "route": "api". Expects the caller's fail, safe, and variables (provider,
+ # policy, requested_model, prompt, outdir, base, output, tmp, stderr, combined,
+-# last, owner, authors, author_models, task, wrapper_rev). The call itself is
++# last, owner, authors, author_models, task, wrapper_rev, gateway_dir). The call itself is
+ # api-call.py: tool-free, key from the Keychain, spend-capped. Never returns.
+ api_route() {
+   local title="$1"; shift
+   command -v jq >/dev/null || fail 69 "jq is required"
+   safe "$prompt" prompt; prompt="$REPLY"
+   model="$(jq -er --arg tier "$requested_model" '.api.tiers[$tier].model | select(type == "string" and length > 0)' "$policy" 2>> "$stderr")" || fail 78 "$title API review tier must be one of: $(jq -r '.api.tiers | keys | join(", ")' "$policy" 2>/dev/null)"
+-  effort="$(jq -r --arg tier "$requested_model" '.api.tiers[$tier].reasoning_effort // "not set"' "$policy")"
++  effort="$(jq -r --arg tier "$requested_model" '.api.tiers[$tier].reasoning_effort // "not set"' "$policy")" || fail 78 "cannot read the API policy"
+   local budget_tier="$requested_model"
+   [[ "$requested_model" == hard ]] || budget_tier=routine
+-  budget="$(python3 "${0:A:h}/review-budget.py" "$provider" "$budget_tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
++  budget="$(python3 "$gateway_dir/review-budget.py" "$provider" "$budget_tier" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+   { cat "$prompt"; for f in "$@"; do safe "$f" packet; printf '\n\n===== %s =====\n' "$(basename "$REPLY")"; cat "$REPLY"; done
+     print -r -- "
+ 
+ TOOLS: None are available. Review only the text above.
+-"; cat "${0:A:h}/output-contract.txt"; } > "$combined"
+-  model_invocation_started=1
+-  local code
++"; cat "$gateway_dir/output-contract.txt"; } > "$combined" || fail 78 "cannot assemble the review prompt"
++  # api-call.py creates the marker immediately before sending; only then may
++  # the model have been reached (Kimi diagnostics report this truthfully).
++  local marker="$tmp/api.sent" code
+   set +e
+-  python3 "${0:A:h}/api-call.py" "$policy" "$requested_model" "$combined" "$last" "$tmp/api.json" 2>> "$stderr"
++  python3 "$gateway_dir/api-call.py" "$policy" "$requested_model" "$combined" "$last" "$tmp/api.json" "$marker" 2>> "$stderr"
+   code=$?
+   set -e
+-  # 78/79/64 are refusals before any request; anything else after it was sent.
+-  if [[ $code -eq 78 || $code -eq 79 || $code -eq 64 ]]; then model_invocation_started=0; fail $code "$(tail -1 "$stderr")"; fi
++  if [[ -e "$marker" ]]; then model_invocation_started=1; fi
++  if [[ ! -e "$marker" ]]; then
++    case $code in 64|78|79) fail $code "$(tail -1 "$stderr")" ;; 0) fail 70 "API call reported success without sending" ;; *) fail 78 "$title API preflight failed (exit $code): $(tail -1 "$stderr")" ;; esac
++  fi
+   [[ $code -eq 0 ]] || fail 70 "$title API call failed: $(tail -1 "$stderr")"
+-  python3 "${0:A:h}/reviewer-validate.py" < "$last" || fail 70 "$title response failed substance validation"
+-  local checks; checks="$(python3 "${0:A:h}/reviewer-claims.py" < "$last")"
++  python3 "$gateway_dir/reviewer-validate.py" < "$last" || fail 70 "$title response failed substance validation"
++  local checks
++  checks="$(python3 "$gateway_dir/reviewer-claims.py" < "$last")" || fail 70 "$title mechanical checks failed"
+   { print "# $title review"; print ''; [[ -n "$owner" ]] && print "Owner: $owner"; [[ $#authors -eq 0 ]] || print "Authors: ${(j:, :)authors}"; [[ $#author_models -eq 0 ]] || print "Author models: ${(j:, :)author_models}"; [[ -z "$task" ]] || print "Task: $task"
+     print "Wrapper revision: $wrapper_rev"; print "Route: api"; print "Requested model: $requested_model"; print "Selected model: $model"; print "Reasoning effort: $effort"
+     print "Resolved model(s): $(jq -r '.served_model // "not reported"' "$tmp/api.json")"
+     print "Usage: $(jq -c '{input_tokens, output_tokens}' "$tmp/api.json")"
+-    print "API cost: $(jq -r '"$\(.cost_usd) (ledger $\(.ledger_spent_usd) of $\(.spend_cap_usd) cap)"' "$tmp/api.json")"
++    print "API cost: $(jq -r '"$\(.cost_usd) (ledger committed $\(.ledger_committed_usd) of $\(.spend_cap_usd) cap)"' "$tmp/api.json")"
+     [[ -z "${REVIEW_BUDGET_OVERRIDE:-}" ]] || print "Budget override: $REVIEW_BUDGET_OVERRIDE"
+-    while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md"
+-  chmod 444 "$tmp/final.md"; mv "$tmp/final.md" "$output"; shasum -a 256 "$output" > "$output.sha256"; chmod 444 "$output.sha256"
++    while IFS= read -r note; do [[ -z "$note" ]] || print "Mechanical check: $note"; done <<< "$checks"; print ''; cat "$last"; } > "$tmp/final.md" || fail 70 "cannot write the $title artifact"
++  { chmod 444 "$tmp/final.md" && mv "$tmp/final.md" "$output" && shasum -a 256 "$output" > "$output.sha256" && chmod 444 "$output.sha256"; } || fail 70 "cannot store the $title artifact or checksum"
+   [[ -s "$output" && -s "$output.sha256" ]] || fail 70 "$title artifact or checksum was not created"
+   print "captured $output"
+   exit 0
+diff --git a/codex-review.sh b/codex-review.sh
+index 3d098e8..079f49a 100755
+--- a/codex-review.sh
++++ b/codex-review.sh
+@@ -38,7 +38,7 @@ fi
+ # and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
+ provider=codex; policy="${CODEX_REVIEW_MODEL_POLICY:-$(dirname "$0")/codex-model-policy.json}"
+ route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read codex-model-policy.json"
+-if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Codex "$@"; fi
++if [[ "$route" == api ]]; then gateway_dir="${0:A:h}"; source "$gateway_dir/api-route.sh"; api_route Codex "$@"; fi
+ [[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
+ command -v codex >/dev/null || fail 69 "codex CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ # Reviews run on the ChatGPT plan. An API key would switch Codex to billed
+diff --git a/keychain-store.py b/keychain-store.py
+new file mode 100644
+index 0000000..4291da1
+--- /dev/null
++++ b/keychain-store.py
+@@ -0,0 +1,51 @@
++#!/usr/bin/env python3
++"""Store an API key in the macOS login Keychain without exposing it.
++
++  keychain-store.py SERVICE
++
++Prompts for the key with echo off (no length limit, unlike the `security`
++prompt, which truncates at 128 characters) and writes it through the Security
++framework, so the key never appears in argv, the environment, shell history
++or a file. An existing item for SERVICE and $USER is replaced. Run it
++yourself in a terminal; it prints only the stored length.
++"""
++
++import ctypes
++import ctypes.util
++import getpass
++import os
++import subprocess
++import sys
++
++ERR_DUPLICATE = -25299
++
++
++def main(argv):
++    if len(argv) != 2 or not argv[1].replace("-", "").isalnum():
++        print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
++        return 64
++    service, account = argv[1].encode(), os.environ.get("USER", "").encode()
++    secret = getpass.getpass(f"Key for {argv[1]} (input hidden): ").strip().encode()
++    if not secret or not all(33 <= b < 127 for b in secret):
++        print("refusing an empty key or one with spaces or non-ASCII characters", file=sys.stderr)
++        return 65
++    sec = ctypes.CDLL(ctypes.util.find_library("Security"))
++    add = sec.SecKeychainAddGenericPassword
++    add.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_char_p,
++                    ctypes.c_uint32, ctypes.c_char_p, ctypes.c_void_p]
++    add.restype = ctypes.c_int32
++    status = add(None, len(service), service, len(account), account, len(secret), secret, None)
++    if status == ERR_DUPLICATE:
++        # Deleting needs only the service and account names, never the key.
++        subprocess.run(["security", "delete-generic-password", "-a", account.decode(), "-s", service.decode()],
++                       capture_output=True, check=False)
++        status = add(None, len(service), service, len(account), account, len(secret), secret, None)
++    if status != 0:
++        print(f"Keychain write failed (OSStatus {status})", file=sys.stderr)
++        return 70
++    print(f"stored {len(secret)} characters in Keychain item {argv[1]}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv))
+diff --git a/kimi-review.sh b/kimi-review.sh
+index 5d784b5..081b154 100755
+--- a/kimi-review.sh
++++ b/kimi-review.sh
+@@ -46,7 +46,7 @@ fi
+ # and a spend cap (api-route.sh, api-call.py); "subscription" (default) uses the CLI plan.
+ provider=kimi; policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
+ route="$(jq -r '.route // "subscription"' "$policy" 2>/dev/null)" || fail 78 "cannot read kimi-model-policy.json"
+-if [[ "$route" == api ]]; then source "${0:A:h}/api-route.sh"; api_route Kimi "$@"; fi
++if [[ "$route" == api ]]; then gateway_dir="${0:A:h}"; source "$gateway_dir/api-route.sh"; api_route Kimi "$@"; fi
+ [[ "$route" == subscription ]] || fail 78 "unknown review route: $route"
+ command -v kimi >/dev/null || fail 69 "Kimi Code CLI not found"; command -v jq >/dev/null || fail 69 "jq is required"; safe "$prompt" prompt; prompt="$REPLY"
+ policy="${KIMI_REVIEW_MODEL_POLICY:-$(dirname "$0")/kimi-model-policy.json}"
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index d3f023f..ca56f4e 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -2,7 +2,9 @@
+ import importlib.util
+ import io
+ import json
++import math
+ import tempfile
++import threading
+ import unittest
+ import urllib.error
+ from pathlib import Path
+@@ -12,9 +14,17 @@ ROOT = Path(__file__).resolve().parent.parent
+ _spec = importlib.util.spec_from_file_location("api_call", ROOT / "api-call.py")
+ api = importlib.util.module_from_spec(_spec)
+ _spec.loader.exec_module(api)
++SECRET = "sk-test-SECRET-value-123"
+ 
+ 
+ class Resp(io.BytesIO):
++    def __init__(self, body, url="https://api.example.test/v1/responses"):
++        super().__init__(body)
++        self._url = url
++
++    def geturl(self):
++        return self._url
++
+     def __enter__(self):
+         return self
+ 
+@@ -22,11 +32,20 @@ class Resp(io.BytesIO):
+         return False
+ 
+ 
+-def policy(style="openai-responses", cap=18.0):
++def policy(style="openai-responses", cap=18.0, **tier):
++    t = {"model": "gpt-6.1-sol", "reasoning_effort": "high", "max_output_tokens": 1000,
++         "usd_per_1m_input": 2.0, "usd_per_1m_output": 10.0}
++    t.update(tier)
+     return {"api": {"style": style, "base_url": "https://api.example.test/v1", "keychain_service": "svc",
+-                    "ledger": "test", "spend_cap_usd": cap,
+-                    "tiers": {"hard": {"model": "gpt-6.1-sol", "reasoning_effort": "high", "max_output_tokens": 1000,
+-                                       "usd_per_1m_input": 2.0, "usd_per_1m_output": 10.0}}}}
++                    "ledger": "test", "spend_cap_usd": cap, "tiers": {"hard": t}}}
++
++
++def openai_reply(text="VERDICT: ACCEPT", status="completed", usage=(1000, 500), extra=()):
++    out = [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": text}]}, *extra]
++    r = {"model": "gpt-6.1-sol", "status": status, "output": out}
++    if usage:
++        r["usage"] = {"input_tokens": usage[0], "output_tokens": usage[1]}
++    return r
+ 
+ 
+ class ApiCallTest(unittest.TestCase):
+@@ -34,80 +53,186 @@ class ApiCallTest(unittest.TestCase):
+         self.tmp = tempfile.TemporaryDirectory()
+         self.base = Path(self.tmp.name)
+         api.STATE = self.base / "state"
++        api._SECRET.clear()
+         (self.base / "prompt.txt").write_text("Review this.\n")
+         self.sent = []
+ 
+     def tearDown(self):
+         self.tmp.cleanup()
+ 
+-    def run_call(self, pol, reply, tier="hard"):
++    def call(self, pol, reply, tier="hard", secret=SECRET):
+         (self.base / "policy.json").write_text(json.dumps(pol))
+-
+-        def fake_urlopen(req, timeout):
+-            self.sent.append((req.full_url, dict(req.header_items()), json.loads(req.data)))
+-            if isinstance(reply, Exception):
+-                raise reply
+-            return Resp(json.dumps(reply).encode())
++        self.marker = self.base / "sent"
++        self.marker.unlink(missing_ok=True)
++        (self.base / "out.md").unlink(missing_ok=True)
++
++        class FakeOpener:
++            def open(inner, req, timeout):
++                self.sent.append((req.full_url, dict(req.header_items()), json.loads(req.data)))
++                if isinstance(reply, BaseException):
++                    raise reply
++                if isinstance(reply, Resp):
++                    return reply
++                return Resp(json.dumps(reply).encode())
++
++        def fake_key(cfg):
++            api._SECRET.append(secret)
++            if not all(33 <= ord(c) < 127 for c in secret):
++                raise api.Refusal(78, "malformed key")
++            return secret
+ 
+         argv = ["api-call.py", str(self.base / "policy.json"), tier, str(self.base / "prompt.txt"),
+-                str(self.base / "out.md"), str(self.base / "meta.json")]
+-        with mock.patch.object(api, "key", return_value="sk-test-secret"), \
+-                mock.patch.object(api.urllib.request, "urlopen", fake_urlopen):
+-            try:
+-                return api.main(argv)
+-            except SystemExit as exc:
+-                return exc.code
+-
+-    def ledger(self):
+-        path = api.STATE / "api-spend-test.jsonl"
+-        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+-
+-    def test_openai_success_records_cost_and_sends_no_tools(self):
+-        reply = {"model": "gpt-6.1-sol-2026", "status": "completed",
+-                 "output": [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": "VERDICT: ACCEPT"}]}],
+-                 "usage": {"input_tokens": 1000, "output_tokens": 500}}
+-        self.assertEqual(self.run_call(policy(), reply), 0)
++                str(self.base / "out.md"), str(self.base / "meta.json"), str(self.marker)]
++        err = io.StringIO()
++        with mock.patch.object(api, "key", fake_key), mock.patch.object(api, "opener", lambda: FakeOpener()), \
++                mock.patch("sys.stderr", err):
++            code = api.main(argv)
++        self.err = err.getvalue()
++        return code
++
++    def entries(self):
++        p = api.STATE / "api-spend-test.jsonl"
++        return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
++
++    def committed(self):
++        p = api.STATE / "api-spend-test.jsonl"
++        return api.committed(p.read_text().splitlines()) if p.exists() else 0
++
++    def bound(self):
++        payload = json.dumps(self.sent[0][2]).encode()
++        return math.ceil((len(payload) + api.FRAMING_TOKENS) * 2.0 + 1000 * 10.0)
++
++    # --- success and request shape
++    def test_success_settles_actual_usage_and_sends_no_tools(self):
++        self.assertEqual(self.call(policy(), openai_reply()), 0)
+         url, headers, body = self.sent[0]
+         self.assertTrue(url.endswith("/responses"))
+-        self.assertEqual(body["tools"], [])
+-        self.assertFalse(body["store"])
+-        self.assertEqual(body["reasoning"], {"effort": "high"})
+-        self.assertEqual((self.base / "out.md").read_text(), "VERDICT: ACCEPT")
+-        meta = json.loads((self.base / "meta.json").read_text())
+-        self.assertAlmostEqual(meta["cost_usd"], 1000 * 2 / 1e6 + 500 * 10 / 1e6)
+-        self.assertNotIn("sk-test-secret", (self.base / "meta.json").read_text())
+-        self.assertNotIn("sk-test-secret", (api.STATE / "api-spend-test.jsonl").read_text())
+-
+-    def test_chat_completions_and_tool_calls_rejected(self):
+-        reply = {"model": "kimi-k3.1-pro", "choices": [{"finish_reason": "tool_calls",
+-                 "message": {"content": "", "tool_calls": [{"id": "x"}]}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+-        self.assertEqual(self.run_call(policy("chat-completions"), reply), 70)
++        self.assertEqual((body["tools"], body["store"], body["reasoning"]), ([], False, {"effort": "high"}))
++        self.assertEqual(self.committed(), math.ceil(1000 * 2.0 + 500 * 10.0))
++        self.assertEqual([e["kind"] for e in self.entries()], ["reserve", "settle"])
++        self.assertTrue(self.marker.exists())
++
++    def test_chat_request_asks_for_one_choice(self):
++        reply = {"model": "k", "choices": [{"finish_reason": "stop", "message": {"content": "VERDICT: ACCEPT"}}],
++                 "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
++        self.assertEqual(self.call(policy("chat-completions"), reply), 0)
+         self.assertTrue(self.sent[0][0].endswith("/chat/completions"))
+-        self.assertEqual(len(self.ledger()), 1)
++        self.assertEqual(self.sent[0][2]["n"], 1)
++
++    # --- F1 redirects / host
++    def test_redirect_handler_refuses(self):
++        handler = api._NoRedirect()
++        req = mock.Mock(full_url="https://api.example.test/v1/responses")
++        with self.assertRaises(urllib.error.HTTPError):
++            handler.redirect_request(req, None, 302, "Found", {}, "http://evil.test/")
++
++    def test_response_from_other_host_fails_and_keeps_reservation(self):
++        resp = Resp(json.dumps(openai_reply()).encode(), url="https://evil.test/x")
++        self.assertEqual(self.call(policy(), resp), 70)
++        self.assertEqual(self.committed(), self.bound())
++
++    # --- F3 secrets never echoed
++    def test_error_text_is_redacted(self):
++        body = io.BytesIO(f'{{"error": "bad key {SECRET}"}}'.encode())
++        err = urllib.error.HTTPError("u", 401, "no", {}, body)
++        self.assertEqual(self.call(policy(), err), 70)
++        self.assertNotIn(SECRET, self.err)
++        self.assertIn("[REDACTED]", self.err)
++
++    def test_malformed_key_refused_before_send_without_echo(self):
++        bad = "sk-bad\nkey"
++        self.assertEqual(self.call(policy(), openai_reply(), secret=bad), 78)
++        self.assertEqual(self.sent, [])
++        self.assertNotIn(bad, self.err)
++        self.assertFalse(self.marker.exists())
+ 
+-    def test_spend_cap_refuses_before_any_request(self):
++    def test_unexpected_exception_after_send_is_70_and_redacted(self):
++        self.assertEqual(self.call(policy(), RuntimeError(f"boom {SECRET}")), 70)
++        self.assertNotIn(SECRET, self.err)
++
++    # --- F4/F5/F6 spend bound, reservation, failures
++    def test_bound_counts_every_body_byte(self):
++        (self.base / "prompt.txt").write_text("é" * 5000)  # 2 bytes each, JSON-escaped further
++        self.call(policy(), openai_reply(usage=None))
++        self.assertGreaterEqual(self.committed(), math.ceil(10000 * 2.0 + 1000 * 10.0))
++
++    def test_cap_refuses_before_any_request_and_counts_open_reservations(self):
+         api.STATE.mkdir(parents=True)
+-        (api.STATE / "api-spend-test.jsonl").write_text(json.dumps({"cost_usd": 17.995}) + "\n")
+-        self.assertEqual(self.run_call(policy(), {}), 79)
++        (api.STATE / "api-spend-test.jsonl").write_text(
++            json.dumps({"kind": "reserve", "id": "a", "micro_usd": 17_990_000}) + "\n")
++        self.assertEqual(self.call(policy(), openai_reply()), 79)
+         self.assertEqual(self.sent, [])
++        self.assertFalse(self.marker.exists())
++
++    def test_concurrent_reservations_cannot_both_pass(self):
++        (self.base / "policy.json").write_text(json.dumps(policy(cap=0.02)))
++        cfg = api.load(self.base / "policy.json", "hard")
++        results = []
+ 
+-    def test_unknown_usage_is_charged_worst_case(self):
+-        reply = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+-        self.assertEqual(self.run_call(policy(), reply), 0)
+-        self.assertTrue(self.ledger()[0]["estimated"])
+-        self.assertGreaterEqual(self.ledger()[0]["cost_usd"], 1000 * 10 / 1e6)
+-
+-    def test_http_4xx_is_counted_failure_without_charge(self):
+-        err = urllib.error.HTTPError("u", 401, "no", {}, io.BytesIO(b'{"error":"bad key"}'))
+-        self.assertEqual(self.run_call(policy(), err), 70)
+-        self.assertEqual(self.ledger()[0]["cost_usd"], 0.0)
+-
+-    def test_bad_policy_and_tier_refuse_before_request(self):
+-        self.assertEqual(self.run_call(policy(), {}, tier="routine"), 78)
+-        bad = policy(); bad["api"]["base_url"] = "http://insecure"
+-        self.assertEqual(self.run_call(bad, {}), 78)
++        def go():
++            try:
++                api.reserve(cfg, "hard", 15_000)
++                results.append("ok")
++            except api.Refusal as exc:
++                results.append(exc.code)
++
++        threads = [threading.Thread(target=go) for _ in range(4)]
++        [t.start() for t in threads]
++        [t.join() for t in threads]
++        self.assertEqual(sorted(map(str, results)), ["79", "79", "79", "ok"])
++
++    def test_missing_usage_charges_full_bound(self):
++        self.assertEqual(self.call(policy(), openai_reply(usage=None)), 0)
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_transport_failure_keeps_full_reservation(self):
++        self.assertEqual(self.call(policy(), urllib.error.URLError("down")), 70)
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_unbilled_4xx_releases_but_429_and_5xx_keep(self):
++        for code, expect_zero in ((401, True), (422, True), (429, False), (500, False)):
++            with self.subTest(code=code):
++                (api.STATE / "api-spend-test.jsonl").unlink(missing_ok=True)
++                self.sent.clear()
++                err = urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(b"{}"))
++                self.assertEqual(self.call(policy(), err), 70)
++                self.assertEqual(self.committed(), 0 if expect_zero else self.bound())
++
++    def test_malformed_ledger_and_bad_numbers_refuse(self):
++        api.STATE.mkdir(parents=True)
++        (api.STATE / "api-spend-test.jsonl").write_text('{"kind": "settle", "id": "a", "micro_usd": -5}\n')
++        self.assertEqual(self.call(policy(), openai_reply()), 78)
++        (api.STATE / "api-spend-test.jsonl").unlink()
++        for bad in (policy(cap=float("nan")), policy(usd_per_1m_output=-1.0), policy(cap=float("inf"))):
++            self.assertEqual(self.call(bad, openai_reply()), 78)
++        bad = policy(); bad["api"]["base_url"] = "http://insecure.test/v1"
++        self.assertEqual(self.call(bad, openai_reply()), 78)
+         self.assertEqual(self.sent, [])
+ 
++    # --- F9 completion and tools
++    def test_incomplete_or_tool_replies_fail(self):
++        cases = [
++            ("openai-responses", openai_reply(status="incomplete")),
++            ("openai-responses", openai_reply(extra=[{"type": "function_call"}])),
++            ("chat-completions", {"choices": [{"finish_reason": "length", "message": {"content": "VERDICT: ACCEPT"}}],
++                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
++            ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "function_call": {}}}],
++                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
++            ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "x", "tool_calls": [], "function_call": {}}}],
++                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
++            ("chat-completions", {"choices": [{"finish_reason": "stop", "message": {"content": "a"}},
++                                              {"finish_reason": "stop", "message": {"content": "b"}}],
++                                  "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
++        ]
++        for style, reply in cases:
++            with self.subTest(style=style, reply=str(reply)[:60]):
++                self.assertEqual(self.call(policy(style), reply), 70)
++                self.assertFalse((self.base / "out.md").exists())
++
++    def test_unknown_tier_refuses_before_send(self):
++        self.assertEqual(self.call(policy(), openai_reply(), tier="routine"), 78)
++        self.assertFalse(self.marker.exists())
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/wrapper-failure-smoke.zsh b/tests/wrapper-failure-smoke.zsh
+index 04479f5..bbfd66a 100755
+--- a/tests/wrapper-failure-smoke.zsh
++++ b/tests/wrapper-failure-smoke.zsh
+@@ -9,6 +9,30 @@ trap 'rm -rf "$test_root"' EXIT INT TERM
+ root="$test_root/gateway"; mkdir -p "$root"
+ cp -p "$source_root"/*.sh "$source_root"/*.py "$source_root"/*.json "$source_root"/output-contract.txt "$root"/
+ # CLI mocks below exercise the subscription route; the API route has unit tests.
++cat > "$root/api-call.py" <<'PYEOF'
++#!/usr/bin/env python3
++# Stand-in for api-call.py: exercises the wrapper's API branch without a network or key.
++import json, os, sys
++from pathlib import Path
++policy, tier, prompt, out_text, out_meta, marker = sys.argv[1:]
++mode = os.environ.get("API_MOCK_MODE", "ok")
++if mode == "preflight":
++    print("no Keychain item 'svc'", file=sys.stderr); sys.exit(78)
++if mode == "cap":
++    print("API spend cap: refused", file=sys.stderr); sys.exit(79)
++if mode == "crash-before":
++    sys.exit(1)
++Path(marker).touch()
++if mode == "sent-fail":
++    print("API request failed: HTTP 500", file=sys.stderr); sys.exit(70)
++if mode == "crash-after":
++    sys.exit(1)
++body = "The supplied packet is internally consistent and the proposed boundary is testable. " * 8
++body += "\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT"
++Path(out_text).write_text(body)
++Path(out_meta).write_text(json.dumps({"served_model": "mock-served", "input_tokens": 10, "output_tokens": 5,
++                                      "cost_usd": 0.0001, "ledger_committed_usd": 0.0001, "spend_cap_usd": 18.0}))
++PYEOF
+ for p in codex kimi; do jq '.route = "subscription"' "$root/$p-model-policy.json" > "$root/$p.tmp" && mv "$root/$p.tmp" "$root/$p-model-policy.json"; done
+ git -C "$root" init -q && git -C "$root" add -A && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m snapshot
+ mkdir -p "$test_root/.collab" "$test_root/packet" "$test_root/shared" "$test_root/bin"
+@@ -639,4 +663,33 @@ for invalid in (
+     assert subprocess.run([validator], input=invalid, text=True).returncode != 0
+ PY
+ 
++
++# API route (model policy "route": "api"): shared checks still run, exit codes
++# follow the send marker, and Kimi diagnostics report model_invocation_began truthfully.
++api_repo="$test_root/api"; mkdir -p "$api_repo/.collab"
++for p in codex kimi; do jq '.route = "api" | .api = {style:"chat-completions", base_url:"https://x.test/v1", keychain_service:"svc", ledger:"t", spend_cap_usd:1, tiers:{routine:{model:"m", max_output_tokens:10, usd_per_1m_input:1, usd_per_1m_output:1}}}' "$root/$p-model-policy.json" > "$test_root/$p-api-policy.json"; done
++api_run() { # mode provider output expected-exit
++  local mode="$1" p="$2" out="$3" want="$4" envname
++  envname="${(U)p}_REVIEW_MODEL_POLICY"
++  set +e; env API_MOCK_MODE="$mode" "$envname=$test_root/$p-api-policy.json" "$root/$p-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" "$api_repo/.collab/$out" "$test_root/packet/source.md" >/dev/null 2>"$test_root/api-last.err"; local code=$?; set -e
++  [[ $code -eq $want ]] || { print -u2 "API route $p/$mode: expected $want, got $code: $(<"$test_root/api-last.err")"; exit 1; }
++}
++api_run ok codex codex-api-ok.md 0
++grep -Fx 'Route: api' "$api_repo/.collab/codex-api-ok.md" >/dev/null
++grep -Fx 'Resolved model(s): mock-served' "$api_repo/.collab/codex-api-ok.md" >/dev/null
++shasum -a 256 -c "$api_repo/.collab/codex-api-ok.md.sha256" >/dev/null 2>&1 || (cd "$api_repo/.collab" && shasum -a 256 -c codex-api-ok.md.sha256 >/dev/null)
++api_run preflight kimi kimi-api-pre.md 78
++jq -e '.model_invocation_began == false and .exit_code == 78' "$api_repo/.collab/kimi-api-pre.diagnostic.json" >/dev/null
++api_run cap kimi kimi-api-cap.md 79
++jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-cap.diagnostic.json" >/dev/null
++api_run crash-before kimi kimi-api-crash0.md 78
++jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-crash0.diagnostic.json" >/dev/null
++api_run sent-fail kimi kimi-api-sent.md 70
++jq -e '.model_invocation_began == true and .exit_code == 70' "$api_repo/.collab/kimi-api-sent.diagnostic.json" >/dev/null
++api_run crash-after kimi kimi-api-crash1.md 70
++jq -e '.model_invocation_began == true' "$api_repo/.collab/kimi-api-crash1.diagnostic.json" >/dev/null
++api_run ok codex ../../outside.md 65
++api_run ok kimi kimi-api-self.md 0
++set +e; env API_MOCK_MODE=ok "KIMI_REVIEW_MODEL_POLICY=$test_root/kimi-api-policy.json" "$root/kimi-review.sh" --packet-root "$test_root" --owner claude --author-model kimi-k3 routine "$test_root/prompt.md" "$api_repo/.collab/kimi-api-vendor.md" "$test_root/packet/source.md" >/dev/null 2>&1; code=$?; set -e
++[[ $code -eq 64 && ! -e "$api_repo/.collab/kimi-api-vendor.diagnostic.json" ]] || { print -u2 "API route skipped the vendor rule ($code)"; exit 1; }
+ print "wrapper failure smoke tests passed"

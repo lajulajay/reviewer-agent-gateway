@@ -22,6 +22,8 @@ if mode == "cap":
     print("API spend cap: refused", file=sys.stderr); sys.exit(79)
 if mode == "crash-before":
     sys.exit(1)
+if mode == "zero-nomarker":
+    sys.exit(0)
 Path(marker).touch()
 if mode == "sent-fail":
     print("API request failed: HTTP 500", file=sys.stderr); sys.exit(70)
@@ -684,6 +686,8 @@ api_run cap kimi kimi-api-cap.md 79
 jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-cap.diagnostic.json" >/dev/null
 api_run crash-before kimi kimi-api-crash0.md 78
 jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-crash0.diagnostic.json" >/dev/null
+api_run zero-nomarker kimi kimi-api-zero.md 78
+jq -e '.model_invocation_began == false' "$api_repo/.collab/kimi-api-zero.diagnostic.json" >/dev/null
 api_run sent-fail kimi kimi-api-sent.md 70
 jq -e '.model_invocation_began == true and .exit_code == 70' "$api_repo/.collab/kimi-api-sent.diagnostic.json" >/dev/null
 api_run crash-after kimi kimi-api-crash1.md 70
