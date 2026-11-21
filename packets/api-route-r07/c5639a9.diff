@@ -1,0 +1,40 @@
+diff --git a/api-call.py b/api-call.py
+index 03ae563..d16482f 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -170,7 +170,7 @@ def reserve(cfg, tier, bound):
+ def settle(cfg, call_id, amount, note):
+     with ledger_path(cfg).open("a") as fh:
+         fcntl.flock(fh, fcntl.LOCK_EX)
+-        append(fh, {"kind": "settle", "id": call_id, "micro_usd": amount, "note": note,
++        append(fh, {"kind": "settle", "id": call_id, "micro_usd": amount, "note": redact(note)[:120],
+                     "at": datetime.now(timezone.utc).isoformat()})
+ 
+ 
+@@ -286,7 +286,7 @@ def run(argv):
+             problem = "substance validation failed"
+     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
+     if problem:
+-        cost, note = bound, f"reply rejected ({problem}): full bound kept"
++        cost, note = bound, "reply rejected: full bound kept"  # fixed text: problem may carry server values
+     elif usage_ok:
+         cost, note = micro(tin, tout, cfg), "usage"
+     else:
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index be26865..4b67287 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -249,6 +249,13 @@ class ApiCallTest(unittest.TestCase):
+         self.assertNotIn("invalid_request_error", self.err)  # no server-supplied field is printed
+         self.assertNotIn("leaked prompt", self.err)
+ 
++    def test_server_values_never_reach_the_ledger(self):
++        self.assertEqual(self.call(policy(), openai_reply(status=f"weird {SECRET}")), 70)
++        ledger = (api.STATE / "api-spend-test.jsonl").read_text()
++        self.assertNotIn(SECRET, ledger)
++        self.assertNotIn("weird", ledger)
++        self.assertNotIn(SECRET, self.err)
++
+     def test_every_ancestor_directory_is_synced(self):
+         synced = []
+         with mock.patch.object(api, "_fsync_dir", synced.append):
