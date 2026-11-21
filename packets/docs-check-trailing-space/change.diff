@@ -1,0 +1,42 @@
+diff --git a/docs-check.py b/docs-check.py
+index 80ba61a..f227877 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -528,11 +528,13 @@ def disposition_errors(ws, rid):
+     if m:
+         # The later review must contain the exact status line "<ID> is resolved."
+         # at the start of a line: affirmative, specific, and in the reviewer's words.
++        # Trailing spaces or tabs are ignored (Codex r03 of 2026-11-21-api-validator-reason
++        # ended the line with two spaces); any other trailing text still fails.
+         later = int(m.group(1))
+         if later <= rnd or later not in ws.reviews:
+             return [f"{rid}: verified cites r{later:02d}, which is not a later indexed round"]
+         text = artifact_text(ws.repo / ws.reviews[later])
+-        if not re.search(rf"(?m)^{re.escape(rid)} is resolved\.$", text):
++        if not re.search(rf"(?m)^{re.escape(rid)} is resolved\.[ \t]*$", text):
+             return [f"{rid}: r{later:02d} has no line '{rid} is resolved.'"]
+         if re.search(rf"(?m)^\W*{re.escape(rid)} remains open", text):
+             return [f"{rid}: r{later:02d} also says {rid} remains open"]
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index 0b5403b..60cf766 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -473,6 +473,18 @@ class DocsCheckTest(unittest.TestCase):
+         self.f.artifact("codex-x-r02.md", contradicted)
+         self.assertIn("R01-C1: r02 also says R01-C1 remains open", self.done()[1])
+ 
++    def test_verified_line_ignores_trailing_spaces_only(self):
++        self.f.workstream(GOOD_ROWS, log=CLOSURE_LOG)
++        padded = REVIEW2.replace("R01-F1 is resolved.\n", "R01-F1 is resolved.  \n").replace(
++            "R01-C1 is resolved.\n", "R01-C1 is resolved.\t\n")
++        self.f.artifact("codex-x-r02.md", padded)
++        code, out = self.done()
++        self.assertEqual(code, 0, out)
++        for tail in (" but see below", ".", "  x", "\u00a0"):
++            with self.subTest(tail=tail):
++                self.f.artifact("codex-x-r02.md", REVIEW2.replace("R01-F1 is resolved.\n", f"R01-F1 is resolved.{tail}\n"))
++                self.assertIn("R01-F1: r02 has no line 'R01-F1 is resolved.'", self.done()[1])
++
+     def test_pilot_record_enforces_gateway_memory_budget(self):
+         self.f.workstream(GOOD_ROWS)
+         code, out = self.record()

@@ -473,6 +473,35 @@ class DocsCheckTest(unittest.TestCase):
         self.f.artifact("codex-x-r02.md", contradicted)
         self.assertIn("R01-C1: r02 also says R01-C1 remains open", self.done()[1])
 
+    def test_verified_line_ignores_trailing_spaces_only(self):
+        self.f.workstream(GOOD_ROWS, log=CLOSURE_LOG)
+        padded = REVIEW2.replace("R01-F1 is resolved.\n", "R01-F1 is resolved.  \n").replace(
+            "R01-C1 is resolved.\n", "R01-C1 is resolved.\t\n")
+        self.f.artifact("codex-x-r02.md", padded)
+        code, out = self.done()
+        self.assertEqual(code, 0, out)
+        for tail in (" but see below", ".", "  x", "\u00a0"):
+            with self.subTest(tail=tail):
+                self.f.artifact("codex-x-r02.md", REVIEW2.replace("R01-F1 is resolved.\n", f"R01-F1 is resolved.{tail}\n"))
+                self.assertIn("R01-F1: r02 has no line 'R01-F1 is resolved.'", self.done()[1])
+
+    def test_verified_line_accepts_crlf_in_md_artifacts(self):
+        self.f.workstream(GOOD_ROWS, log=CLOSURE_LOG)
+        self.f.artifact("codex-x-r02.md", REVIEW2.replace("\n", "\r\n"))
+        code, out = self.done()
+        self.assertEqual(code, 0, out)
+
+    def test_verified_line_accepts_crlf_in_json_artifacts(self):
+        for name in ("codex-x-r02.md", "codex-x-r02.md.sha256"):
+            (self.f.repo / ".collab" / name).unlink(missing_ok=True)
+        body = REVIEW2.split("\n\n", 1)[1].replace("\n", "\r\n")
+        review = json.dumps({"reviewer_metadata": {"owner": "claude", "wrapper_revision": "{rev}"}, "response": body})
+        self.f.artifact("gemini-x-r02.json", review)
+        self.f.workstream(GOOD_ROWS, reviews=[("r01", "codex-x-r01.md", "REJECT"), ("r02", "gemini-x-r02.json", "REJECT")],
+                          log=CLOSURE_LOG)
+        code, out = self.done()
+        self.assertEqual(code, 0, out)
+
     def test_pilot_record_enforces_gateway_memory_budget(self):
         self.f.workstream(GOOD_ROWS)
         code, out = self.record()
