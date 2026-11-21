@@ -52,12 +52,11 @@ rule. `docs-check.py record` re-checks every indexed artifact and every
 workstream `Owner:` line against the registry.
 
 Active roles: Claude, Codex, and Copilot own work; Kimi is reviewer-only.
-Kimi, Claude, and Codex are official reviewers when active in
+Kimi, Claude, Codex, and Copilot are official reviewers when active in
 `reviewer-roster.json`, and Gemini is always the fallback reviewer, never an
-owner. Copilot reviews only when called directly (`copilot-review.sh`); it is
-not in `reviewer-roster.json` or automatic selection yet. Remove a reviewer from `active_reviewers` when its subscription lapses
-and restore it when renewed; `tie_break_order` must continue to list all three
-subscription reviewers.
+owner. Remove a reviewer from `active_reviewers` when its subscription lapses
+and restore it when renewed; `tie_break_order` must continue to list all four
+subscription reviewers (Copilot last).
 
 `auto-review.sh` chooses among active subscription reviewers other than the
 owner and additional authors, and not already at the repository's per-provider
@@ -72,6 +71,13 @@ template and candidate outputs reject an existing artifact or diagnostic, so a
 failed request cannot be retried under the same name. The template date must
 be today's local date. A user-approved budget override after a refusal uses a
 new `rNN` name; the workstream Decisions entry must approve that new round.
+
+Copilot is a candidate when `copilot-model-policy.json` maps an eligible model
+for the tier (`auto-review.sh` passes the tier); it is then called with that
+tier and picks the model itself. A channel that owns or wrote the work (for
+Copilot-owned work, Copilot) is allowed when its model's vendor differs but
+ranks after every other eligible channel, and does not keep a follow-up
+because it reviewed the previous round.
 
 This is deterministic local load balancing, not a claim to know each provider's
 remaining quota. Claude and Kimi expose usage interactively and Codex exposes
@@ -250,6 +256,13 @@ resolved model, reviewer vendor, CLI version, tool events, token usage, and AI
 credits used against the cap. `COPILOT_MAX_TIME_SECONDS` (default 1800) bounds
 the call. Copilot `hard` counts toward the one hard round per topic.
 
+Escalation: when a topic has used its five rounds and the escalation reviewer
+(Gemini) may not review the work because a Google model wrote it, the
+wrapper passes `--escalation-substitute <vendor>` to `review-budget.py`, and
+Copilot may run the escalation rounds with a model whose vendor has not yet
+reviewed the topic (choose it with `--vendor`). Otherwise Copilot is refused
+after the cap like every non-escalation reviewer.
+
 ## API route for Codex and Kimi
 
 `codex-model-policy.json` and `kimi-model-policy.json` carry a `route`:
@@ -311,8 +324,8 @@ which refuses to transmit source to a third-party API) records a request
 instead; the user, or an agent the user asks, runs it:
 
 ```text
-review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini --tier T
-    --owner O [--author A]... [--author-model M]... [--task ID] [--override-reason TEXT]
+review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini|copilot --tier T
+    --owner O [--author A]... [--author-model M]... [--task ID] [--vendor V] [--override-reason TEXT]
     PROMPT .collab/<provider>-YYYY-MM-DD-<topic>[-rNN].md PACKET...
 review-request.py list [REPO]
 review-request.py run [--apply-override] reviewers/requests/<output name>.request.json
@@ -334,6 +347,61 @@ the repository or the recorded packet root. The embedded hashes detect files
 changed after `create` but do not authenticate the request, an editable
 record; the wrapper remains the control. Commit the request and result with
 the review they produced.
+
+A Copilot request resolves its reviewer model at `create` through
+`copilot-model-policy.json` (or `--vendor`) and records the vendor and model;
+`run` passes `--vendor`, so the reviewer vendor cannot change between the two.
+
+## Review tickets, pools and batches (Copilot coordinator)
+
+A Copilot sub-agent runs a reviewer wrapper only on a ticket its coordinator
+issued (proposal D5):
+
+```text
+review-ticket.py issue --workstream FILE --task ID --tier hard|routine --reviewer CHANNEL|auto
+    [--vendor V] --owner O [--author A]... [--author-model M]... [--batch ID]...
+    [--packet-root DIR] --scope PATH... -- .collab/<reviewer>-YYYY-MM-DD-<topic>[-rNN].md
+review-ticket.py list [REPO]
+```
+
+`issue` applies the vendor rule, refuses an output (or, for `auto`, any
+candidate output) that already has an artifact or diagnostic, and writes
+`reviewers/tickets/<output name>.ticket.json`. Every wrapper checks before
+any model call: when the owner is `copilot` and `--task` is given, a ticket is
+required (exit 66 without one); any ticket that exists for the output is
+enforced whoever the owner is. The call must match the ticket's reviewer (an
+`auto-` ticket covers the candidate outputs `<channel>-<rest>`), Copilot
+vendor, tier (Claude `opus` is hard, Gemini is routine), owner, task, authors
+and author models, and every packet must lie under a `--scope` path (exit 64
+otherwise). A damaged ticket is refused, never ignored. The sub-agent reports
+the artifact path, exit code and verdict to the coordinator, which owns the
+dispositions, the budget and `docs-check.py record`. A ticket coordinates
+parallel agents; like a request it is an editable record, not a credential,
+and the wrappers still apply every other check. Commit tickets with the
+reviews they produced.
+
+**Review pool.** A user Decisions entry in the ticket's workstream may set a
+daily pool per channel, for example:
+
+```text
+- 2026-11-21, user, scope: review pool. Quote: "...". Review pool: copilot 20/day, claude 12/day. Supersedes: none.
+```
+
+Only entries written as `<date>, user, ...` count, and the last one naming a
+channel wins. A round under a ticket for that workstream is then capped by the
+pool instead of the eight-per-provider-per-repository cap, and pooled rounds
+do not count against other work's repository cap. The five-rounds and
+one-hard-round limits still apply per topic, so per task. The pool line is
+repository text an agent could write; the sponsor accepted that risk
+(2026-11-21), as for budget-override decisions.
+
+**Batches.** Several small tasks whose authors leave the same reviewers
+eligible may share one routine round: the ticket's `--task` is the batch ID
+(for example `B1`), `--batch` lists the member tasks, the identity names every
+author model of every member, and the wrapper is called with `--task B1`.
+Findings are labelled per task (`T3-F1`) and dispositioned in each task's
+entry. A batch is never hard tier. When the pool is short, the coordinator
+issues tickets in the build spec's dependency order.
 
 ## Gemini reviews through Antigravity CLI
 

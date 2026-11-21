@@ -28,7 +28,7 @@ class ReviewerSelectTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def write_roster(self, active=("kimi", "claude", "codex"), order=("kimi", "claude", "codex")):
+    def write_roster(self, active=("kimi", "claude", "codex"), order=("kimi", "claude", "codex", "copilot")):
         self.roster.write_text(json.dumps({"active_reviewers": list(active), "tie_break_order": list(order)}))
 
     def output(self, name="auto-2026-10-16-new.md"):
@@ -55,7 +55,7 @@ class ReviewerSelectTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Gemini is fallback-only"):
             self.select()
         self.write_roster(order=("kimi", "claude", "gemini"))
-        with self.assertRaisesRegex(ValueError, "must contain claude, codex, and kimi"):
+        with self.assertRaisesRegex(ValueError, "must contain claude, codex, kimi, and copilot"):
             self.select()
 
     def test_additional_authors_are_excluded(self):
@@ -170,8 +170,8 @@ class ReviewerSelectTest(unittest.TestCase):
     def test_malformed_rosters_fail_closed(self):
         cases = (
             ("{", json.JSONDecodeError),
-            (json.dumps({"active_reviewers": "kimi", "tie_break_order": ["kimi", "claude", "codex"]}), ValueError),
-            (json.dumps({"active_reviewers": ["kimi", "kimi"], "tie_break_order": ["kimi", "claude", "codex"]}), ValueError),
+            (json.dumps({"active_reviewers": "kimi", "tie_break_order": ["kimi", "claude", "codex", "copilot"]}), ValueError),
+            (json.dumps({"active_reviewers": ["kimi", "kimi"], "tie_break_order": ["kimi", "claude", "codex", "copilot"]}), ValueError),
             (json.dumps({"active_reviewers": ["kimi"], "tie_break_order": ["kimi", "claude"]}), ValueError),
         )
         for text, error in cases:
@@ -179,6 +179,41 @@ class ReviewerSelectTest(unittest.TestCase):
                 self.roster.write_text(text)
                 with self.assertRaises(error):
                     self.select()
+
+    def test_copilot_joins_rotation_and_same_channel_ranks_last(self):
+        all4 = ("kimi", "claude", "codex", "copilot")
+        self.write_roster(active=all4, order=all4)
+        self.assertEqual(self.select("claude"), ["kimi", "codex", "copilot"])
+        # Copilot-owned GPT work: Codex is OpenAI (excluded); Copilot may review
+        # through a non-OpenAI model but ranks after every other channel.
+        order = selector.order(self.roster, "copilot", self.output(), today=TODAY, author_models=("gpt-6-luna",))
+        self.assertEqual(order, ["kimi", "claude", "copilot"])
+        # Even when the other channels have more rounds today.
+        self.artifact("kimi-2026-10-16-a.md")
+        self.artifact("claude-2026-10-16-b.md")
+        order = selector.order(self.roster, "copilot", self.output(), today=TODAY, author_models=("gpt-6-luna",))
+        self.assertEqual(order, ["kimi", "claude", "copilot"])
+
+    def test_copilot_latest_reviewer_of_own_channel_is_not_sticky(self):
+        all4 = ("kimi", "claude", "codex", "copilot")
+        self.write_roster(active=all4, order=all4)
+        self.artifact("copilot-2026-10-16-new.md")
+        order = selector.order(self.roster, "copilot", self.output("auto-2026-10-16-new-r02.md"), today=TODAY,
+                               author_models=("gpt-6-luna",))
+        self.assertEqual(order[-1], "copilot")
+        # A different-channel owner keeps the latest Copilot reviewer first.
+        order = selector.order(self.roster, "claude", self.output("auto-2026-10-16-new-r02.md"), today=TODAY)
+        self.assertEqual(order[0], "copilot")
+
+    def test_copilot_is_ineligible_when_every_mapped_vendor_wrote_the_work(self):
+        self.write_roster(active=("copilot",), order=("kimi", "claude", "codex", "copilot"))
+        every = ("claude-haiku-5.5", "gpt-6-luna", "gemini-3.8-flash", "mai-code-2-flash", "grok-4.6", "kimi-k3")
+        with self.assertRaisesRegex(ValueError, "no eligible active subscription reviewer"):
+            selector.order(self.roster, "copilot", self.output(), today=TODAY, author_models=every, tier="routine")
+        self.assertEqual(selector.order(self.roster, "copilot", self.output(), today=TODAY,
+                                        author_models=every[:-1], tier="routine"), ["copilot"])
+        with self.assertRaisesRegex(ValueError, "tier must be"):
+            selector.order(self.roster, "claude", self.output(), today=TODAY, tier="opus")
 
     def test_cli_reports_malformed_roster_as_preflight_failure(self):
         self.roster.write_text("{}")
@@ -206,6 +241,7 @@ case "$provider" in
   kimi) code="${AUTO_MOCK_KIMI_CODE:-0}" ;;
   claude) code="${AUTO_MOCK_CLAUDE_CODE:-0}" ;;
   codex) code="${AUTO_MOCK_CODEX_CODE:-0}" ;;
+  copilot) code="${AUTO_MOCK_COPILOT_CODE:-0}" ;;
 esac
 if [[ "$code" -ne 0 ]]; then
   jq -n --arg provider "$provider" --argjson code "$code" --arg reason "simulated provider returned nonzero after model invocation began" \
@@ -222,15 +258,16 @@ class AutoReviewTest(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.gateway = self.base / "gateway"
         self.gateway.mkdir()
-        for name in ("auto-review.sh", "reviewer-select.py", "review-budget.py", "review-budget.json", "reviewer-roster.json", "agents.py", "agents.json"):
+        for name in ("auto-review.sh", "reviewer-select.py", "review-budget.py", "review-budget.json", "reviewer-roster.json", "agents.py", "agents.json",
+                     "copilot-model-select.py", "copilot-model-policy.json", "review-ticket.py"):
             shutil.copy2(ROOT / name, self.gateway / name)
         # Fixed roster: tests must not depend on which subscriptions are live today.
         (self.gateway / "reviewer-roster.json").write_text(json.dumps(
-            {"active_reviewers": ["kimi", "claude", "codex"], "tie_break_order": ["kimi", "claude", "codex"]}))
+            {"active_reviewers": ["kimi", "claude", "codex"], "tie_break_order": ["kimi", "claude", "codex", "copilot"]}))
         provider = self.gateway / "provider-mock.sh"
         provider.write_text(MOCK_PROVIDER)
         provider.chmod(0o755)
-        for name in ("kimi", "claude", "codex"):
+        for name in ("kimi", "claude", "codex", "copilot"):
             os.link(provider, self.gateway / f"{name}-review.sh")
         self.repo = self.base / "repo"
         self.collab = self.repo / ".collab"
@@ -253,7 +290,7 @@ class AutoReviewTest(unittest.TestCase):
     def run_auto(self, *extra_env, tier="routine", owner="codex", name=None, roster=None, authors=(), author_models=()):
         env = os.environ.copy()
         env["AUTO_MOCK_LOG"] = str(self.log)
-        for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE"):
+        for key in ("AUTO_MOCK_KIMI_CODE", "AUTO_MOCK_CLAUDE_CODE", "AUTO_MOCK_CODEX_CODE", "AUTO_MOCK_COPILOT_CODE"):
             env.pop(key, None)
         for assignment in extra_env:
             key, value = assignment.split("=", 1)
@@ -308,7 +345,7 @@ class AutoReviewTest(unittest.TestCase):
         self.assertIn("trying the next eligible reviewer", result.stderr)
 
     def test_claude_routine_tier_maps_to_sonnet(self):
-        roster = {"active_reviewers": ["claude"], "tie_break_order": ["kimi", "claude", "codex"]}
+        roster = {"active_reviewers": ["claude"], "tie_break_order": ["kimi", "claude", "codex", "copilot"]}
         result = self.run_auto(roster=roster)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [f"claude|sonnet|claude-{self.day}-topic.md"])
@@ -331,6 +368,18 @@ class AutoReviewTest(unittest.TestCase):
         result = self.run_auto(name=name)
         self.assertEqual(result.returncode, 65)
         self.assertEqual(self.calls(), [f"kimi|routine|kimi-{self.day}-attempt-once.md"])
+        self.assertIn("reserved by", result.stderr)
+
+    def test_auto_calls_copilot_with_the_tier(self):
+        roster = {"active_reviewers": ["copilot"], "tie_break_order": ["kimi", "claude", "codex", "copilot"]}
+        result = self.run_auto(roster=roster, owner="claude", tier="hard")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls(), [f"copilot|hard|copilot-{self.day}-topic.md"])
+
+    def test_copilot_candidate_reserves_the_auto_template(self):
+        (self.collab / f"copilot-{self.day}-taken.md").write_text("x")
+        result = self.run_auto(name=f"auto-{self.day}-taken.md")
+        self.assertEqual(result.returncode, 65)
         self.assertIn("reserved by", result.stderr)
 
     def test_all_preflight_failures_end_with_gemini_fallback_instruction(self):

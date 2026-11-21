@@ -19,6 +19,9 @@ python3 "${0:A:h}/agents.py" check gemini "${identity[@]}" || exit $?
 requested_model="$1"; model="$requested_model"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
 [[ "$outdir" == "$root/.collab" && "$base" == *.json && ! -e "$output" && ! -e "$outdir/${base%.json}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
+# Copilot sub-agent rounds run only on a coordinator ticket (review-ticket.py); any ticket for this output is enforced.
+ticket_args=("${identity[@]}"); [[ -z "$task" ]] || ticket_args+=(--task "$task")
+python3 "${0:A:h}/review-ticket.py" check gemini "$requested_model" "$output" "${ticket_args[@]}" -- "$@" || exit $?
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-gemini.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT INT TERM
 response="$tmp/stream.jsonl"; stderr="$tmp/stderr"; hook_log="$tmp/hook.log"; diagnostic="$outdir/${base%.json}.diagnostic.json"; start=$SECONDS
 : > "$response"; : > "$stderr"; : > "$hook_log"

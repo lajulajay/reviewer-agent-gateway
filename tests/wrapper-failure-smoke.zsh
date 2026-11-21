@@ -437,6 +437,24 @@ owner_rejects "$root/claude-review.sh" --owner copilot --task 'bad task' --autho
 for f in copilot-nomodel copilot-anthropic mixed-anthropic copilot-google copilot-router copilot-openai copilot-badtask; do
   [[ ! -e "$test_root/.collab/$f.diagnostic.json" ]] || { print -u2 "identity refusal left a diagnostic: $f"; exit 1; }
 done
+# Review tickets (D5): a Copilot task's round needs the coordinator's ticket; refused before any model call.
+set +e
+PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
+  "$root/claude-review.sh" --owner copilot --author-model gpt-6.1-terra --task T7 sonnet "$test_root/prompt.md" \
+  "$test_root/.collab/claude-copilot-noticket.md" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 66 && ! -e "$test_root/.collab/claude-copilot-noticket.diagnostic.json" ]] || { print -u2 "missing ticket: expected 66 and no diagnostic, got $code"; exit 1; }
+mkdir -p "$test_root/workstreams" "$test_root/vendor/workstreams"; print '# W' > "$test_root/workstreams/w.md"; print '# W' > "$test_root/vendor/workstreams/w.md"
+python3 "$root/review-ticket.py" issue --workstream "$test_root/workstreams/w.md" --task T7 --tier routine --reviewer claude --owner copilot \
+  --author-model gpt-6.1-terra --author-model mai-code-2-flash --scope "$test_root/packet" -- "$test_root/.collab/claude-copilot.md" >/dev/null
+set +e
+PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
+  "$root/claude-review.sh" --owner copilot --author-model gpt-6.1-terra --author-model mai-code-2-flash --task T7 opus "$test_root/prompt.md" \
+  "$test_root/.collab/claude-copilot.md" "$test_root/packet/source.md" >/dev/null 2>&1
+code=$?
+set -e
+[[ $code -eq 64 && ! -e "$test_root/.collab/claude-copilot.diagnostic.json" ]] || { print -u2 "ticket tier mismatch: expected 64, got $code"; exit 1; }
 PATH="$test_root/bin:$PATH" CLAUDE_REVIEW_MODEL_POLICY="$test_root/claude-policy.json" CLAUDE_TEST_MODE=success \
   "$root/claude-review.sh" --owner copilot --author-model gpt-6.1-terra --author-model mai-code-2-flash --task T7 sonnet "$test_root/prompt.md" \
   "$test_root/.collab/claude-copilot.md" "$test_root/packet/source.md" >/dev/null
@@ -444,6 +462,8 @@ grep -Fx 'Owner: copilot' "$test_root/.collab/claude-copilot.md" >/dev/null
 grep -Fx 'Author models: gpt-6.1-terra, mai-code-2-flash' "$test_root/.collab/claude-copilot.md" >/dev/null
 grep -Fx 'Task: T7' "$test_root/.collab/claude-copilot.md" >/dev/null
 mkdir -p "$test_root/vendor/.collab"  # fresh repository: the shared one is at its Gemini daily cap
+python3 "$root/review-ticket.py" issue --packet-root "$test_root" --workstream "$test_root/vendor/workstreams/w.md" --task T8 --tier routine --reviewer gemini \
+  --owner copilot --author-model claude-sonnet-5.5 --scope "$test_root/packet" -- "$test_root/vendor/.collab/gemini-copilot.json" >/dev/null
 PATH="$test_root/bin:$PATH" AGY_TEST_MODE=success "$root/gemini-review.sh" --packet-root "$test_root" --owner copilot --author-model claude-sonnet-5.5 --task T8 pro \
   "$test_root/prompt.md" "$test_root/vendor/.collab/gemini-copilot.json" "$test_root/packet/source.md" >/dev/null
 jq -e '.reviewer_metadata.owner == "copilot" and .reviewer_metadata.author_models == ["claude-sonnet-5.5"] and .reviewer_metadata.task == "T8" and .reviewer_metadata.authors == []' "$test_root/vendor/.collab/gemini-copilot.json" >/dev/null
@@ -562,7 +582,7 @@ grep -Fx "Mechanical check: F1 states 63 hex characters; the quoted value measur
 for i in {1..9}; do : > "$broot/.collab/claude-2020-01-0$i-old-r01.md"; done
 # Seven Claude reviews and one counted failure ran here today: the next is refused.
 breview claude-review.sh sonnet claude-$today-filler-r01.md >/dev/null
-brefused 'reviews already ran in this repository today' claude-review.sh sonnet claude-$today-other-r01.md
+brefused 'reviews already ran in this repository today (outside review pools)' claude-review.sh sonnet claude-$today-other-r01.md
 
 # Fixes from review r01, in a fresh repository so the daily cap is not hit.
 broot="$test_root/budget2"; mkdir -p "$broot/.collab"; print 'Budget packet.' > "$broot/packet.md"
@@ -778,6 +798,20 @@ for line in 'Owner: claude' 'Task: T9' 'Requested model: hard' 'Selected model: 
   'Resolved model(s): gpt-6.1-terra' 'CLI version: GitHub Copilot CLI 1.0.114' 'Tool events: 0' 'AI credits: 2.5 AI credits (cap 60)'; do
   grep -Fx -- "$line" "$copilot_repo/.collab/copilot-2026-11-21-hard.md" >/dev/null || { print -u2 "copilot-hard missing: $line"; exit 1; }
 done
+# Escalation substitute: after the topic cap, Copilot may stand in for Gemini only when
+# Gemini may not review the work (a Google author), with a vendor not yet involved.
+esc_repo="$test_root/copilot-esc"; mkdir -p "$esc_repo/.collab"; esc_day="$(date +%F)"
+for n in 1 2 3 4 5; do
+  if (( n % 2 )); then p=kimi; else p=codex; fi
+  print "Requested model: routine" > "$esc_repo/.collab/$p-$esc_day-esc-r0$n.md"
+done
+set +e; copilot_review "$esc_repo" routine "copilot-$esc_day-esc-r06.md" --owner claude >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 79 ]] || { print -u2 "copilot escalation without a Google author: expected 79, got $code"; exit 1; }
+rm -f "$esc_repo/.collab/copilot-$esc_day-esc-r06.diagnostic.json"
+copilot_review "$esc_repo" routine "copilot-$esc_day-esc-r07.md" --owner copilot --author-model gemini-4-hydrogen >/dev/null
+grep -Fx 'Reviewer vendor: anthropic' "$esc_repo/.collab/copilot-$esc_day-esc-r07.md" >/dev/null || { print -u2 "copilot escalation substitute did not run"; exit 1; }
+set +e; copilot_review "$esc_repo" routine "copilot-$esc_day-esc-r08.md" --owner copilot --author-model gemini-4-hydrogen --vendor anthropic >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 79 ]] || { print -u2 "copilot escalation with an involved vendor: expected 79, got $code"; exit 1; }
 grep -F 'testable. The supplied' "$copilot_repo/.collab/copilot-2026-11-21-hard.md" >/dev/null
 [[ -s "$copilot_repo/.collab/copilot-2026-11-21-hard.md.sha256" ]]
 # Copilot-owned work: every author model's vendor is skipped.

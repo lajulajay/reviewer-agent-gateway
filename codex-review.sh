@@ -19,6 +19,9 @@ python3 "${0:A:h}/agents.py" check codex "${identity[@]}" || exit $?
 requested_model="$1"; prompt="$2"; output="$3"; shift 3
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
 [[ "$outdir" == "$root/.collab" && "$base" == *.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output"; exit 65; }
+# Copilot sub-agent rounds run only on a coordinator ticket (review-ticket.py); any ticket for this output is enforced.
+ticket_args=("${identity[@]}"); [[ -z "$task" ]] || ticket_args+=(--task "$task")
+python3 "${0:A:h}/review-ticket.py" check codex "$requested_model" "$output" "${ticket_args[@]}" -- "$@" || exit $?
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-codex.XXXXXX")"; trap 'rm -rf "$tmp"' EXIT INT TERM
 stdout="$tmp/events.jsonl"; stderr="$tmp/stderr"; combined="$tmp/prompt.txt"; last="$tmp/last.md"; diagnostic="$outdir/${base%.md}.diagnostic.json"; start=$SECONDS
 : > "$stdout"; : > "$stderr"

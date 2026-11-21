@@ -21,7 +21,7 @@ outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; r
 [[ "$outdir" == "$root/.collab" && "$base" == auto-*.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted automatic output"; exit 65; }
 # Reserve the auto- template across every provider prefix before selection, so a
 # counted failure on one candidate can never free the template for a new auto- run.
-for provider in claude codex kimi; do
+for provider in claude codex kimi copilot; do
   reserved="$outdir/${provider}-${base#auto-}"
   [[ ! -e "$reserved" && ! -e "${reserved%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted automatic output (reserved by $reserved)"; exit 65; }
 done
@@ -34,7 +34,7 @@ fi
 set +e
 identity=(--owner "$owner"); for a in "${authors[@]}"; do identity+=(--author "$a"); done; for m in "${author_models[@]}"; do identity+=(--author-model "$m"); done
 [[ -z "$task" ]] || identity+=(--task "$task")
-selection="$(python3 "$gateway/reviewer-select.py" "$gateway/reviewer-roster.json" "$owner" "$output" "${authors[@]}" "${(@)${(@)author_models/#/--author-model=}}" 2>&1)"
+selection="$(python3 "$gateway/reviewer-select.py" "$gateway/reviewer-roster.json" "$owner" "$output" "${authors[@]}" "${(@)${(@)author_models/#/--author-model=}}" "--tier=$tier" 2>&1)"
 code=$?
 set -e
 [[ $code -eq 0 ]] || { print -u2 "$selection"; exit "$code"; }

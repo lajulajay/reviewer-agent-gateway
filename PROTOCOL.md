@@ -31,8 +31,8 @@ registry of agents and the model vendors each one runs.
   may not author reviewed work. Every wrapper and automatic selection refuse
   a reviewer that shares a vendor with any of them, and record the identity
   in the artifact.
-- **Reviewer roster.** `reviewer-roster.json` lists the Claude, Codex, and
-  Kimi reviewers currently usable by subscription or API. Update it when
+- **Reviewer roster.** `reviewer-roster.json` lists the Claude, Codex, Kimi,
+  and Copilot reviewers currently usable. Update it when
   access starts or lapses; automatic selection never chooses an inactive reviewer. Gemini is
   deliberately absent because it is fallback-only. Codex and Kimi may run on
   a paid API instead of a subscription (`"route": "api"` in their model
@@ -90,7 +90,7 @@ fails over only after preflight exit 69 or 78; details are in README.md.
 
 Copilot reviews as the vendor of the model it selects by tier from
 `copilot-model-policy.json` (`--vendor` picks one); the vendor rule applies
-to that model. Automatic selection does not yet include Copilot.
+to that model.
 
 Choose the smallest sufficient tier and record the requested tier, selected
 and resolved model(s), and a one-sentence rationale. The higher tier
@@ -119,7 +119,8 @@ Every review call spends the user's plan usage, so the wrappers enforce
 - **One hard-tier round per topic** (Claude `opus`, Codex or Copilot `hard`, or any Kimi
   call classified as hard by requested tier, K3-family alias, or `high`
   effort); use it where it matters most.
-- **Eight reviews per provider per repository per day.**
+- **Eight reviews per provider per repository per day** (or a user-set
+  workstream pool; README).
 - **Claude follow-up rounds run at low effort**; the first round runs at
   medium. A follow-up packet lists the open IDs and the owner's response to
   each, and asks only whether each is resolved.
@@ -164,6 +165,7 @@ code against the packet before acting.
 - **Review requests.** An owner that cannot send a packet records it with
   `review-request.py create`; the user, or an agent they ask, runs it with
   `review-request.py run` through the normal wrapper (README).
+- **Review tickets.** Copilot tasks need a coordinator ticket (README).
 
 ## Artifacts and records
 

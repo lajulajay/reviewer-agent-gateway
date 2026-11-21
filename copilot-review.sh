@@ -31,6 +31,9 @@ model="${selection%% *}"; rest="${selection#* }"; model_vendor="${rest%% *}"; ma
 python3 "${0:A:h}/agents.py" check copilot "${identity[@]}" --reviewer-model "$model" || exit $?
 outdir="$(cd "$(dirname "$output")" && pwd -P)"; base="$(basename "$output")"; root="$(cd "$outdir/.." && pwd -P)"
 [[ "$outdir" == "$root/.collab" && "$base" == copilot-*.md && ! -e "$output" && ! -e "$outdir/${base%.md}.diagnostic.json" ]] || { print -u2 "invalid, existing, or previously attempted output (must be .collab/copilot-*.md)"; exit 65; }
+# Copilot sub-agent rounds run only on a coordinator ticket (review-ticket.py); any ticket for this output is enforced.
+ticket_args=("${identity[@]}" --vendor "$model_vendor"); [[ -z "$task" ]] || ticket_args+=(--task "$task")
+python3 "${0:A:h}/review-ticket.py" check copilot "$requested_model" "$output" "${ticket_args[@]}" -- "$@" || exit $?
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/reviewers-copilot.XXXXXX")"
 stdout="$tmp/stream.jsonl"; stderr="$tmp/stderr"; combined="$tmp/prompt.txt"; last="$tmp/last.md"; usage="$tmp/usage.json"; diagnostic="$outdir/${base%.md}.diagnostic.json"; start=$SECONDS
 model_invocation_started=0; sum_linked=0; stage=""; stage_sum=""
@@ -66,7 +69,13 @@ prompt_bytes="$(wc -c < "$combined" | tr -d ' ')"
 [[ "$prompt_bytes" -le "$max_prompt_bytes" ]] || fail 65 "prompt and packet exceed $max_prompt_bytes bytes"
 timeout_seconds="${COPILOT_MAX_TIME_SECONDS:-1800}"
 [[ "$timeout_seconds" == <-> && "$timeout_seconds" -ge 1 ]] || fail 64 "COPILOT_MAX_TIME_SECONDS must be a positive integer"
-budget="$(python3 "$(dirname "$0")/review-budget.py" copilot "$requested_model" "$outdir/$base" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
+# When the escalation reviewer may not review this work (vendor rule), Copilot may
+# substitute for it with a vendor not yet involved in the topic (review-budget.py).
+escalation="$(jq -er '.escalation_provider | select(type == "string")' "$(dirname "$0")/review-budget.json" 2>> "$stderr")" || fail 78 "review-budget.json has no escalation_provider"
+esc_sub=(); set +e; python3 "$(dirname "$0")/agents.py" check "$escalation" "${identity[@]}" 2>/dev/null; escalation_rc=$?; set -e
+[[ $escalation_rc -eq 0 || $escalation_rc -eq 64 ]] || fail 78 "cannot check the escalation reviewer's eligibility"
+[[ $escalation_rc -ne 64 ]] || esc_sub=(--escalation-substitute "$model_vendor")
+budget="$(python3 "$(dirname "$0")/review-budget.py" copilot "$requested_model" "$outdir/$base" "${esc_sub[@]}" 2> "$tmp/budget.err")" || fail 79 "$(<"$tmp/budget.err")"
 # An empty workspace and an empty Copilot home per call: no user MCP configuration, plugins,
 # custom agents or saved state can load. Sign-in comes from the system credential store.
 workspace="$tmp/workspace"; copilot_home="$tmp/home"; mkdir -m 700 "$workspace" "$copilot_home"

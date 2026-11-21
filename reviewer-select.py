@@ -16,7 +16,12 @@ _spec = importlib.util.spec_from_file_location("agents", ROOT / "agents.py")
 agents = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(agents)
 
-SUBSCRIPTION_REVIEWERS = ("claude", "codex", "kimi")
+_spec = importlib.util.spec_from_file_location("copilot_model_select", ROOT / "copilot-model-select.py")
+copilot_select = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(copilot_select)
+
+SUBSCRIPTION_REVIEWERS = ("claude", "codex", "kimi", "copilot")
+TIERS = ("hard", "routine")
 
 
 def _string_list(value, label):
@@ -32,9 +37,9 @@ def load_roster(policy_path):
     active = _string_list(policy["active_reviewers"], "active_reviewers")
     order = _string_list(policy["tie_break_order"], "tie_break_order")
     if set(order) != set(SUBSCRIPTION_REVIEWERS) or len(order) != len(SUBSCRIPTION_REVIEWERS):
-        raise ValueError("tie_break_order must contain claude, codex, and kimi exactly once")
+        raise ValueError("tie_break_order must contain claude, codex, kimi, and copilot exactly once")
     if any(provider not in SUBSCRIPTION_REVIEWERS for provider in active):
-        raise ValueError("active_reviewers may contain only claude, codex, and kimi; Gemini is fallback-only")
+        raise ValueError("active_reviewers may contain only claude, codex, kimi, and copilot; Gemini is fallback-only")
     return active, order
 
 
@@ -77,27 +82,43 @@ def _latest_eligible(topic_rounds, available):
     return provider if provider in available else None
 
 
-def _independent(registry, provider, owner, authors, author_models):
+def _independent(registry, provider, owner, authors, author_models, tier=None):
+    """Whether PROVIDER may review this work; Copilot needs an eligible model for the tier."""
     try:
+        if provider == "copilot":
+            policy = json.loads((ROOT / "copilot-model-policy.json").read_text())
+            for t in ([tier] if tier else TIERS):
+                try:
+                    copilot_select.select(policy, t, registry, None, owner, authors, author_models)
+                    return True
+                except (agents.IdentityError, copilot_select.agents.IdentityError):
+                    continue
+            return False
         agents.check(registry, provider, owner, authors, author_models)
         return True
     except agents.IdentityError:
         return False
 
 
-def order(policy_path, owner, output, today=None, authors=(), author_models=(), registry=None):
+def order(policy_path, owner, output, today=None, authors=(), author_models=(), registry=None, tier=None):
     """Return provider names in invocation order for an auto-* output path.
 
     A provider is eligible only if no vendor it runs is the vendor of the
-    owner, an additional author, or any authoring model (agents.json).
+    owner, an additional author, or any authoring model (agents.json); Copilot
+    is eligible when its model policy has an eligible model for the tier.
+    A channel that owns or wrote the work ranks after every other channel
+    (same channel, different vendor: allowed but last), then the usual
+    balancing by today's count and the tie-break order applies.
     """
+    if tier is not None and tier not in TIERS:
+        raise ValueError("tier must be hard or routine")
     registry = registry or agents.load()
     # Validates owner, authors, and author models; raises IdentityError (a ValueError).
     agents.excluded_vendors(registry, owner, authors, author_models)
     output = Path(output)
     active, tie_order = load_roster(Path(policy_path))
     eligible = [provider for provider in tie_order
-                if provider in active and _independent(registry, provider, owner, authors, author_models)]
+                if provider in active and _independent(registry, provider, owner, authors, author_models, tier)]
     if not eligible:
         raise ValueError("no eligible active subscription reviewer; use gemini-review.sh")
     if not output.parent.is_dir():
@@ -116,23 +137,30 @@ def order(policy_path, owner, output, today=None, authors=(), author_models=(), 
     if not available:
         raise ValueError("no eligible active subscription reviewer under today's review budget; use gemini-review.sh")
     tie_index = {provider: index for index, provider in enumerate(tie_order)}
-    balanced = sorted(available, key=lambda provider: (counts[provider], tie_index[provider]))
+    own_channels = {owner, *authors}
+    balanced = sorted(available, key=lambda provider: (provider in own_channels, counts[provider], tie_index[provider]))
     topic_rounds = [round_ for round_ in history if round_[1] == topic]
     latest = _latest_eligible(topic_rounds, available)
-    if latest:
+    if latest and (latest not in own_channels or all(p in own_channels for p in available)):
         return [latest] + [provider for provider in balanced if provider != latest]
     return balanced
 
 
 def main(argv):
     if len(argv) < 4:
-        print("usage: reviewer-select.py ROSTER_JSON OWNER AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...] [--author-model=MODEL...]", file=sys.stderr)
+        print("usage: reviewer-select.py ROSTER_JSON OWNER AUTO_OUTPUT_PATH [ADDITIONAL_AUTHOR...] [--author-model=MODEL...] [--tier=hard|routine]", file=sys.stderr)
         return 64
     extra = argv[4:]
-    authors = [a for a in extra if not a.startswith("--author-model=")]
+    authors = [a for a in extra if not a.startswith("--")]
     models = [a.split("=", 1)[1] for a in extra if a.startswith("--author-model=")]
+    tiers = [a.split("=", 1)[1] for a in extra if a.startswith("--tier=")]
+    unknown = [a for a in extra if a.startswith("--") and not a.startswith(("--author-model=", "--tier="))]
+    if unknown or len(tiers) > 1:
+        print(f"reviewer selection error: unknown or repeated option {(unknown or ['--tier'])[0]}", file=sys.stderr)
+        return 64
     try:
-        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=authors, author_models=models):
+        for provider in order(Path(argv[1]), argv[2], Path(argv[3]), authors=authors, author_models=models,
+                              tier=tiers[0] if tiers else None):
             print(provider)
         return 0
     except agents.IdentityError as exc:

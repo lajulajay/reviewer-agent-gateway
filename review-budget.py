@@ -11,6 +11,17 @@ may have reached the model. Calls refused before model invocation are not
 counted. After max_rounds_per_topic rounds only the escalation provider may
 run, for escalation_rounds more; then the open points go to the user.
 
+When the escalation provider may not review the work under the vendor rule
+(a Google author), the Copilot wrapper passes --escalation-substitute with its
+model's vendor: Copilot then runs the escalation rounds with a vendor that has
+not yet reviewed the topic.
+
+A review ticket (review-ticket.py) for the output may point at a workstream
+whose user Decisions set a daily review pool (`Review pool: copilot 20/day`).
+The provider's rounds today under that workstream's tickets are then capped
+by the pool instead of max_reviews_per_provider_per_day, and pooled rounds do
+not count against the repository cap of other work.
+
 On success prints the number of earlier rounds on the topic and how many of
 them this provider ran. On refusal
 prints the reason and exits 1. REVIEW_BUDGET_OVERRIDE=<reason> skips every
@@ -18,6 +29,7 @@ limit; the wrapper records the reason in the artifact and docs-check requires
 a matching user decision in the workstream.
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -30,6 +42,44 @@ NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$
 # Current wrappers reserve exits 70 and 74 for failures after invocation began.
 # Preflight failures use other exit codes. Kimi also records the boundary
 # explicitly, which takes precedence for interrupted calls.
+
+
+GATEWAY = Path(__file__).resolve().parent
+
+
+def _module(name):
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), GATEWAY / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def output_name(path, provider):
+    """The output name a counted round was written for (diagnostics share it)."""
+    if path.name.endswith(".diagnostic.json"):
+        return path.name[: -len(".diagnostic.json")] + (".json" if provider == "gemini" else ".md")
+    return path.name
+
+
+def round_vendors(registry, r):
+    """Vendors that reviewed in round R; a Copilot round names its model's vendor."""
+    provider, path = r[0], r[2]
+    spec = registry["channels"].get(provider, {})
+    if spec.get("vendors") != "by-model":
+        return set(spec.get("vendors") or [])
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return {"unknown"}
+    if path.name.endswith(".diagnostic.json"):
+        try:
+            v = json.loads(text).get("reviewer_vendor")
+        except ValueError:
+            v = None
+    else:
+        m = re.search(r"(?m)^Reviewer vendor: (\S+)$", text[:2000])
+        v = m.group(1) if m else None
+    return {v} if v else {"unknown"}
 
 
 def spent_failure(d):
@@ -101,8 +151,13 @@ def day(path, parsed):
 
 
 def main(argv):
+    usage = ("usage: review-budget.py <claude|codex|copilot|gemini|kimi> <hard|routine> <output-path> "
+             "[--escalation-substitute VENDOR]")
+    substitute = None
+    if len(argv) == 6 and argv[4] == "--escalation-substitute" and argv[1] == "copilot" and re.fullmatch(r"[a-z]+", argv[5]):
+        substitute, argv = argv[5], argv[:4]
     if len(argv) != 4 or argv[1] not in PROVIDERS or argv[2] not in ("hard", "routine"):
-        print("usage: review-budget.py <claude|codex|copilot|gemini|kimi> <hard|routine> <output-path>", file=sys.stderr)
+        print(usage, file=sys.stderr)
         return 64
     provider, tier, output = argv[1], argv[2], Path(argv[3])
     policy = json.loads((Path(__file__).resolve().parent / "review-budget.json").read_text())
@@ -115,6 +170,30 @@ def main(argv):
     collab = output.parent
     prior = [r for r in rounds(collab) if r[1] == topic and r[2] != output]
     today = [r for r in rounds(collab) if r[0] == provider and r[3] == date.today()]
+    tickets = _module("review-ticket")
+    repo = collab.parent
+    try:
+        _, ticket = tickets.find(repo, output.name)
+    except tickets.Fail as exc:
+        print(f"review budget: {exc}", file=sys.stderr)
+        return 1
+    pool_ws = tickets.workstream_path(repo, ticket) if ticket and tickets.pool(repo, ticket, provider) else None
+
+    def pooled_under(r):
+        try:
+            _, t = tickets.find(repo, output_name(r[2], provider))
+        except tickets.Fail:
+            return None
+        return tickets.workstream_path(repo, t) if t and tickets.pool(repo, t, provider) else None
+
+    if pool_ws:
+        daily_cap = tickets.pool(repo, ticket, provider)
+        today = [r for r in today if pooled_under(r) == pool_ws]
+        cap_label = f"today under the {provider} review pool of {ticket['workstream']}"
+    else:
+        daily_cap = policy["max_reviews_per_provider_per_day"]
+        today = [r for r in today if pooled_under(r) is None]
+        cap_label = "in this repository today (outside review pools)"
     n, cap = len(prior), policy["max_rounds_per_topic"]
     esc, esc_n = policy["escalation_provider"], policy["escalation_rounds"]
     problems = []
@@ -122,12 +201,22 @@ def main(argv):
         problems.append(f"topic '{topic}' has had {n} review rounds ({cap} plus {esc_n} {esc} escalation); "
                         f"bring the open points to the user (competing claims, evidence, the {esc} assessment, and the decision needed)")
     elif n >= cap and provider != esc:
-        problems.append(f"topic '{topic}' has had {n} review rounds (cap {cap}); escalate to {esc}-review.sh, then to the user")
+        if substitute:
+            registry = _module("agents").load()
+            involved = set().union(*[round_vendors(registry, r) for r in prior]) if prior else set()
+            if "unknown" in involved:
+                problems.append(f"topic '{topic}' is in escalation and an earlier Copilot round does not name its "
+                                "reviewer vendor; bring the open points to the user")
+            elif substitute in involved:
+                problems.append(f"topic '{topic}' is in escalation and {substitute} already reviewed it; "
+                                f"choose a Copilot vendor not yet involved (involved: {', '.join(sorted(involved))})")
+        else:
+            problems.append(f"topic '{topic}' has had {n} review rounds (cap {cap}); escalate to {esc}-review.sh, then to the user")
     hard_n = sum(1 for r in prior if r[4])
     if tier == "hard" and provider in ("claude", "codex", "copilot", "kimi") and hard_n >= policy["max_hard_rounds_per_topic"]:
         problems.append(f"topic '{topic}' already used {hard_n} hard-tier round(s) (cap {policy['max_hard_rounds_per_topic']}); use the routine tier")
-    if len(today) >= policy["max_reviews_per_provider_per_day"]:
-        problems.append(f"{len(today)} {provider} reviews already ran in this repository today (cap {policy['max_reviews_per_provider_per_day']})")
+    if len(today) >= daily_cap:
+        problems.append(f"{len(today)} {provider} reviews already ran {cap_label} (cap {daily_cap})")
     override = os.environ.get("REVIEW_BUDGET_OVERRIDE", "").strip()
     if problems and not override:
         print("review budget exceeded: " + "; ".join(problems)

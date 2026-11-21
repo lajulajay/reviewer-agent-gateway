@@ -75,6 +75,21 @@ class ReviewRequestTest(unittest.TestCase):
         self.assertEqual(len(body["prompt"]["sha256"]), 64)
         self.assertFalse(self.log.exists())
 
+    def test_copilot_request_records_and_passes_the_vendor(self):
+        w = self.gw / "copilot-review.sh"
+        w.write_text(FAKE_WRAPPER)
+        w.chmod(0o755)
+        out = ".collab/copilot-2026-11-20-t5-r08.md"
+        self.assertEqual(self.create(reviewer="copilot", output=out), 0, self.err)
+        body = json.loads(self.req("copilot-2026-11-20-t5-r08.md").read_text())
+        self.assertEqual((body["vendor"], body["reviewer_model"]), ("anthropic", "claude-haiku-5.5"))
+        self.assertEqual(rr.main(["review-request.py", "run", str(self.req("copilot-2026-11-20-t5-r08.md"))]), 0)
+        self.assertIn("--vendor anthropic", self.log.read_text())
+        self.assertEqual(self.create("--vendor", "openai", reviewer="copilot", output=".collab/copilot-2026-11-20-t5-r09.md"), 64)
+        self.assertIn("same vendor", self.err)
+        self.assertEqual(self.create("--vendor", "openai", output=".collab/kimi-2026-11-20-t5-r09.md"), 64)
+        self.assertIn("only to --reviewer copilot", self.err)
+
     def test_vendor_rule_applies_at_create(self):
         self.assertEqual(self.create(reviewer="codex", output=".collab/codex-2026-11-20-t5-r08.md"), 64)
         self.assertIn("same vendor", self.err)

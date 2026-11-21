@@ -1,0 +1,11 @@
+{
+  "provider": "codex",
+  "owner": "claude",
+  "requested_model": "hard",
+  "selected_model": "gpt-6.1-sol",
+  "reason": "review budget exceeded: 9 codex reviews already ran in this repository today (cap 8). Only the user may authorize REVIEW_BUDGET_OVERRIDE=<reason>.",
+  "exit_code": 79,
+  "elapsed_seconds": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Review requests: let an owner ask for a review it cannot send itself.
 
-  review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini --tier T --owner O
-                           [--author A]... [--author-model M]... [--task ID]
+  review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini|copilot --tier T --owner O
+                           [--author A]... [--author-model M]... [--task ID] [--vendor V]
                            [--override-reason TEXT] PROMPT OUTPUT PACKET...
   review-request.py run [--apply-override] REQUEST
   review-request.py list [REPO]
@@ -27,6 +27,11 @@ authenticate the request itself, which is an editable record. The wrapper
 remains the control: it re-applies the vendor rule, budget, packet safety and
 output naming whatever the request says.
 
+For a Copilot request `create` resolves the reviewer model through
+copilot-model-policy.json and records its vendor (and `--vendor` if given);
+`run` passes that vendor to `copilot-review.sh`, so the reviewer vendor the
+user approved cannot change between `create` and `run`.
+
 `list` prints the requests in REPO (default: the current directory) that
 have not been run.
 
@@ -47,8 +52,12 @@ GATEWAY = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("agents", GATEWAY / "agents.py")
 agents = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(agents)
+_spec = importlib.util.spec_from_file_location("copilot_model_select", GATEWAY / "copilot-model-select.py")
+copilot_select = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(copilot_select)
+COPILOT_POLICY = GATEWAY / "copilot-model-policy.json"
 
-REVIEWERS = ("claude", "codex", "kimi", "gemini")  # a request names one reviewer; no auto
+REVIEWERS = ("claude", "codex", "kimi", "gemini", "copilot")  # a request names one reviewer; no auto
 
 
 class Fail(Exception):
@@ -91,7 +100,7 @@ def request_path(repo, output_name):
 
 def create(args):
     opts = {"--packet-root": None, "--reviewer": None, "--tier": None, "--owner": None, "--task": None,
-            "--override-reason": None}
+            "--override-reason": None, "--vendor": None}
     authors, models = [], []
     while args and args[0].startswith("--"):
         if len(args) < 2 or not args[1].strip():
@@ -111,9 +120,16 @@ def create(args):
     if reviewer not in REVIEWERS or not tier or not owner:
         raise Fail(64, f"--reviewer (one of {', '.join(REVIEWERS)}), --tier and --owner are required")
     registry = agents.load()
+    vendor, reviewer_model = opts["--vendor"], None
+    if vendor and reviewer != "copilot":
+        raise Fail(64, "--vendor applies only to --reviewer copilot")
     try:
-        agents.check(registry, reviewer, owner, authors, models)
-    except agents.IdentityError as exc:
+        if reviewer == "copilot":
+            policy = json.loads(COPILOT_POLICY.read_text())
+            reviewer_model, vendor, _ = copilot_select.select(policy, tier, registry, vendor, owner, authors, models)
+        else:
+            agents.check(registry, reviewer, owner, authors, models)
+    except (agents.IdentityError, copilot_select.agents.IdentityError) as exc:
         raise Fail(64, f"identity: {exc}")
     prompt, output, packets = args[0], args[1], args[2:]
     repo, out = repo_of(output)
@@ -134,7 +150,8 @@ def create(args):
 
     body = {"version": 1, "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "reviewer": reviewer, "tier": tier, "owner": owner, "authors": authors, "author_models": models,
-            "task": opts["--task"], "packet_root": str(root) if root else None,
+            "task": opts["--task"], "vendor": vendor, "reviewer_model": reviewer_model,
+            "packet_root": str(root) if root else None,
             "override_reason": opts["--override-reason"], "output": str(out.relative_to(repo)),
             "prompt": {"path": rel(files[0]), "sha256": sha256(files[0])},
             "packets": [{"path": rel(f), "sha256": sha256(f)} for f in files[1:]]}
@@ -160,7 +177,10 @@ def load_request(path):
           and all(isinstance(body.get(k), str) and body[k] for k in strs)
           and all(isinstance(body.get(k), list) and all(isinstance(v, str) for v in body[k])
                   for k in ("authors", "author_models"))
-          and all(body.get(k) is None or isinstance(body[k], str) for k in ("task", "packet_root", "override_reason"))
+          and all(body.get(k) is None or isinstance(body[k], str)
+                  for k in ("task", "packet_root", "override_reason", "vendor", "reviewer_model"))
+          and (body.get("reviewer") != "copilot" or isinstance(body.get("vendor"), str))
+          and (body.get("reviewer") == "copilot" or body.get("vendor") is None)
           and isinstance(body.get("prompt"), dict) and isinstance(body.get("packets"), list)
           and all(isinstance(e, dict) and isinstance(e.get("path"), str) and isinstance(e.get("sha256"), str)
                   for e in [body.get("prompt")] + body.get("packets")))
@@ -196,6 +216,8 @@ def command(repo, body):
         cmd += ["--author-model", m]
     if body.get("task"):
         cmd += ["--task", body["task"]]
+    if body.get("vendor"):
+        cmd += ["--vendor", body["vendor"]]
     return cmd + [body["tier"], files[0], body["output"]] + files[1:]
 
 
@@ -248,7 +270,8 @@ def list_requests(args):
             continue
         found += 1
         extra = "; budget override requested" if body.get("override_reason") else ""
-        print(f"{req.relative_to(repo)}: {body['reviewer']} {body['tier']} for {body['owner']}"
+        who = body["reviewer"] + (f" ({body['vendor']}: {body.get('reviewer_model') or '?'})" if body.get("vendor") else "")
+        print(f"{req.relative_to(repo)}: {who} {body['tier']} for {body['owner']}"
               f" -> {body['output']}{extra}")
     if not found:
         print("no pending review requests")
