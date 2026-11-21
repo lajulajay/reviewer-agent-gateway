@@ -2,10 +2,10 @@
 
 Workstream: 2026-11-21-docs-check-trailing-space
 Owner: Claude (2026-11-21, assigned by the user in this session)
-Status: active
-Branch: docs-check-trailing-space
+Status: done (2026-11-21)
+Branch: docs-check-trailing-space (merged to main)
 Operational: no
-Links: [validator-reason workstream](closed/2026-11-21-api-validator-reason.md)
+Links: [validator-reason workstream](2026-11-21-api-validator-reason.md)
 
 ## Brief
 
@@ -40,15 +40,19 @@ fails with the r01 pattern). Closed records are not rewritten.
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | minor | verified r02 | resolved |
-| R01-F2 | minor | verified r02 | resolved |
-| R01-F3 | minor | verified r02 | resolved |
-| R01-C1 | condition | verified r02 | resolved |
-| R01-C2 | condition | verified r02 | resolved |
+| R01-F1 | minor | verified r02 | closed |
+| R01-F2 | minor | verified r02 | closed |
+| R01-F3 | minor | verified r02 | closed |
+| R01-C1 | condition | verified r02 | closed |
+| R01-C2 | condition | verified r02 | closed |
 
 ## Log
 
 - 2026-11-21: fix and test written in worktree branch
   `docs-check-trailing-space`. Kimi r01 ACCEPT WITH CONDITIONS (JSON CRLF);
   `\r` added with CRLF tests; Kimi r02 ACCEPT. Unit suite and wrapper smoke
-  test pass. Commit, push and merge await the user.
+  test pass.
+- r01: raw review compared with its rows; no unlabeled actionable item
+- r02: raw review compared with its rows; no unlabeled actionable item
+- 2026-11-21: user approved commit, push and merge ("yes"); merged to main
+  as `5b9e576`. Closed.
