@@ -31,9 +31,8 @@ registry of agents and the model vendors each one runs.
   may not author reviewed work. Every wrapper and automatic selection refuse
   a reviewer that shares a vendor with any of them, and record the identity
   in the artifact.
-- **Reviewer roster.** `reviewer-roster.json` lists the Claude, Codex, Kimi,
-  and Copilot reviewers currently usable. Update it when
-  access starts or lapses; automatic selection never chooses an inactive reviewer. Gemini is
+- **Reviewer roster.** `reviewer-roster.json` lists the reviewers currently
+  usable; automatic selection never chooses an inactive one. Gemini is
   deliberately absent because it is fallback-only. Codex and Kimi may run on
   a paid API instead of a subscription (`"route": "api"` in their model
   policy): keys live in the macOS Keychain, and each call reserves its bound
@@ -78,10 +77,9 @@ reviewers/auto-review.sh   --owner <agent> [--author A]... [--author-model M]...
 reviewers/gemini-review.sh --owner <agent> [--author A]... [--author-model M]... [--task ID] <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
 ```
 
-Add `--packet-root <dir>` to use a shared prompt or packet from outside the
-repository. Options go
-before the model or tier. For automatic selection of mixed-authorship work,
-repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
+Options go before the model or tier: `--packet-root <dir>` for a prompt or
+packet outside the repository, one `--author` per author besides the owner,
+`--task <id>` for a delegated task.
 
 For automatic selection, the `auto-` output name is a template dated today;
 the artifact uses the chosen provider's prefix. Selection balances daily
@@ -113,8 +111,7 @@ Every review call spends the user's plan usage, so the wrappers enforce
   model. After five, only `gemini-review.sh` may run, at most twice: an
   assessment and, if the owner fixes what it finds, a check of those fixes.
   After that the owner brings the open points to the user in one packet, as in
-  the disagreement escalation above: the competing claims, the evidence,
-  Gemini's assessment, and the exact decision needed. No further review runs
+  the disagreement escalation above. No further review runs
   unless the user approves an override.
 - **One hard-tier round per topic** (Claude `opus`, Codex or Copilot `hard`, or any Kimi
   call classified as hard by requested tier, K3-family alias, or `high`
@@ -165,7 +162,11 @@ code against the packet before acting.
 - **Review requests.** An owner that cannot send a packet records it with
   `review-request.py create`; the user, or an agent they ask, runs it with
   `review-request.py run` through the normal wrapper (README).
-- **Review tickets.** Copilot tasks need a coordinator ticket (README).
+- **Copilot work.** Each task has a coordinator ticket and a Tasks-table row
+  that its reviews must match. After each merged batch, and before dependent
+  work, `main` gets an integration review by a vendor that wrote none of the
+  batch (`docs-check.py integration`). Sub-agents stop at a draft PR.
+  Roles and limits: `templates/copilot-*.md`.
 
 ## Artifacts and records
 

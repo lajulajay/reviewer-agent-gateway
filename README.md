@@ -399,9 +399,60 @@ repository text an agent could write; the sponsor accepted that risk
 eligible may share one routine round: the ticket's `--task` is the batch ID
 (for example `B1`), `--batch` lists the member tasks, the identity names every
 author model of every member, and the wrapper is called with `--task B1`.
-Findings are labelled per task (`T3-F1`) and dispositioned in each task's
-entry. A batch is never hard tier. When the pool is short, the coordinator
-issues tickets in the build spec's dependency order.
+Each finding starts its text with the task it concerns (`F1 [major]: T3: ...`;
+the contract has no per-task labels) and is dispositioned in the batch round's
+rows. The batch gets its own Tasks row (State `batch`, Covers its members, and
+every member's authors and models). A batch is never hard tier. When the pool is short, the
+coordinator issues tickets in the build spec's dependency order.
+
+**Tasks table.** A workstream with Copilot work keeps a `## Tasks` table
+(template in `templates/workstream.md`):
+
+```text
+| Task | Author | Author-models | Branch | PR | State | Covers |
+| T7 | copilot | gpt-6.1-terra | lajulajay-t7 | <url> | merged | |
+| I1 | copilot | gpt-6.1-terra, gemini-4-hydrogen | main@1a2b3c4 | | ready | T6, T7 |
+```
+
+`docs-check.py record` requires every row's authors to be registry channels,
+every model to resolve to a vendor (never `auto` or a router), a known State
+(`planned`, `draft`, `ready`, `merged`, `dropped`, `batch`), a Branch from
+`draft` on and a PR for `draft`, `ready` and `merged`. Only batch rows and
+integration rows have `Covers`, and they must carry every covered row's
+authors and models. For every post-adoption artifact of Copilot work (owner or
+author `copilot`, a workstream Copilot owns, or a `Task` in the table) the
+recorded owner must be named in the Owner lines; an artifact whose owner or
+author is `copilot` needs a `Task` with a row, and any artifact naming a row's
+task must have exactly its models and include its authors, whoever the owner.
+
+**Integration gate (D7).** An integration row is `I<n>` with Branch
+`main@<commit reviewed>`; its `Covers` lists merged task rows (not batches),
+and it carries all their authors and models, so the wrappers' vendor rule
+picks a reviewer whose vendor wrote none of the batch. The coordinator tickets
+and runs that review with `--task I<n>`. `docs-check.py integration REPO
+WORKSTREAM` runs `record` and fails while a merged task lacks an accepted
+(`VERDICT: ACCEPT`) integration review committed together with its row; if
+that row's `Covers` or Branch changed after the review was committed, the
+review covers nothing (add `I<n+1>` instead). Work that depends on the batch
+waits, and `done` includes the check.
+
+**Legacy owner map.** Copilot work reviewed before Phase 3 was recorded as
+`--owner codex`. Those artifacts are never edited. One user Decisions entry
+per repository, in any of its workstreams, containing
+`Legacy owner map: codex -> copilot` makes `--owner codex` artifacts in a
+Copilot-owned workstream count as Copilot's when first committed on or before
+the entry's date. A second such entry in the repository is an error. The map
+corrects the owner record only: those reviews predate `--author-model`, so
+their author models stay unknown and their independence check is the one
+recorded at the time.
+
+**Roles and shims.** `templates/copilot-instructions.md` (copy to
+`.github/copilot-instructions.md`), `templates/copilot-coordinator.md` and
+`templates/copilot-subagent.md` (copy to `reviewers/`) point at this protocol
+with the D2–D8 rules; a sub-agent may commit and push its task branch and open
+a draft PR, and everything past that is the user's. Copilot's Project cannot
+reach this repository, so consumer repositories add `reviewers/review-ticket.sh`
+and `reviewers/docs-check.sh` shims beside the reviewer shims.
 
 ## Gemini reviews through Antigravity CLI
 

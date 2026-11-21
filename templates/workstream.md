@@ -1,7 +1,7 @@
 # <Title>
 
 Workstream: <YYYY-MM-DD>-<slug>
-Owner: <Codex|Claude> (<date>, assigned by the user at <commit>)
+Owner: <Claude|Copilot|Codex> (<date>, assigned by the user at <commit>)
 Status: active
 Branch: <branch>
 Operational: <yes|no>
@@ -15,6 +15,20 @@ Links: <experiment, issue, or document links>
 
 - <YYYY-MM-DD>, user, scope: <what this covers>.
   Quote: "<user's words>". Supersedes: <earlier decision or none>.
+
+## Tasks
+
+<!-- Copilot delegation only (delete otherwise). One row per sub-agent task; the
+     coordinator keeps it. Author-models: every model that wrote code in the task,
+     the coordinator's included; never auto or Copilot Fusion. State: planned |
+     draft | ready | merged | dropped (Branch from draft on, PR for draft, ready,
+     merged), or batch for a shared routine round (D6), whose Covers lists its
+     members. An integration row I<n> (Branch main@<commit>) covers merged tasks
+     and carries all their authors and models (D7). Reviews run with
+     --task <Task> and must match its row. -->
+
+| Task | Author | Author-models | Branch | PR | State | Covers |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 
 ## Reviews
 

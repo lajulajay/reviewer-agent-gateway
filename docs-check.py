@@ -4,6 +4,7 @@
   docs-check.py record REPO                 records complete, budgets hold
   docs-check.py transfer REPO WORKSTREAM    record + safe to hand off
   docs-check.py done REPO WORKSTREAM        record + every obligation closed
+  docs-check.py integration REPO WORKSTREAM merged tasks lack no integration review (D7)
   docs-check.py dispositions ARTIFACT ROUND print empty disposition rows
   docs-check.py report REPO [--write-baseline | --lower | --add-memory] [--memory DIR]
 
@@ -33,6 +34,10 @@ _spec = __import__("importlib.util").util.spec_from_file_location("agents", GATE
 agents = __import__("importlib.util").util.module_from_spec(_spec)
 _spec.loader.exec_module(agents)
 ROW_ID = re.compile(r"^R(\d+)-([FC]\d+)$")
+TASK_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+INTEGRATION_ID = re.compile(r"^I\d+$")
+TASK_STATES = ("planned", "draft", "ready", "merged", "dropped", "batch")
+LEGACY_MAP = re.compile(r"legacy owner map: codex -> copilot\b", re.I)
 CLOSURE = "raw review compared with its rows; no unlabeled actionable item"
 MAX_OBSERVATION_AGE = 2 * 3600
 
@@ -79,6 +84,17 @@ def artifact_identity(path):
     fields = dict(m.groups() for m in re.finditer(r"(?m)^(Owner|Authors|Author models|Selected model): (.+)$", "\n".join(head)))
     split = lambda key: [v.strip() for v in fields.get(key, "").split(",") if v.strip()]
     return reviewer, fields.get("Owner"), split("Authors"), split("Author models"), fields.get("Selected model")
+
+
+def artifact_task(path):
+    if path.suffix == ".json":
+        try:
+            return (json.loads(path.read_text(errors="replace")).get("reviewer_metadata") or {}).get("task") or None
+        except json.JSONDecodeError:
+            return None
+    head = path.read_text(errors="replace").split("\n\n", 2)[:2]
+    m = re.search(r"(?m)^Task: (.+)$", "\n".join(head))
+    return m.group(1).strip() if m else None
 
 
 def is_review_artifact(path):
@@ -196,6 +212,30 @@ class Workstream:
             if c[0] in self.rows:
                 self.problems.append(f"duplicate findings row {c[0]}")
             self.rows[c[0]] = {"severity": c[1], "disposition": c[-2], "status": c[-1]}
+        self.tasks = self.parse_tasks(self.text, self.problems)
+
+    @staticmethod
+    def parse_tasks(text, problems=None):
+        """Task table (Copilot delegation, proposal D2/D6/D7):
+        | Task | Author | Author-models | Branch | PR | State | Covers |"""
+        problems = [] if problems is None else problems
+        tasks, inside = {}, False
+        split = lambda v: [x.strip() for x in v.split(",") if x.strip() and x.strip() not in ("-", "—")]
+        for line in text.splitlines():
+            if line.startswith("## "):
+                inside = line[3:].strip() == "Tasks"
+                continue
+            c = cells(line) if inside and line.startswith("|") else []
+            if not c or c[0] in ("Task", "") or set(c[0]) <= set(":- "):
+                continue
+            if len(c) != 7 or not TASK_ID.match(c[0]):
+                problems.append(f"malformed task row: {line.strip()[:80]}")
+                continue
+            if c[0] in tasks:
+                problems.append(f"duplicate task row {c[0]}")
+            tasks[c[0]] = {"authors": [a.lower() for a in split(c[1])], "models": split(c[2]),
+                           "branch": c[3], "pr": c[4], "state": c[5], "covers": split(c[6])}
+        return tasks
 
     def section(self, name):
         return "\n".join(self.sections.get(name, []))
@@ -352,9 +392,12 @@ def record(repo):
         else:
             check_memory(gateway_base["agent_cache"], errors)
     registry = agents.load()
-    for wpath in workstreams(repo):
-        ws = Workstream(repo, wpath)
+    sets = [Workstream(repo, w) for w in workstreams(repo)]
+    mapped_before = legacy_owner_map(repo, sets, errors)
+    for ws in sets:
+        wpath = ws.path
         name = wpath.relative_to(repo)
+        errors.extend(f"{name}: {e}" for e in task_errors(ws, registry))
         if not ws.header.get("Owner"):
             errors.append(f"{name}: no Owner line")
         for value in ws.header.get("Owner", []):
@@ -391,6 +434,9 @@ def record(repo):
                 agents.check(registry, reviewer, owner, authors, models, reviewer_model)
             except agents.IdentityError as exc:
                 errors.append(f"{name}: r{rnd:02d} breaks reviewer independence: {exc}")
+            if arel not in legacy:
+                errors.extend(f"{name}: {e}" for e in
+                              copilot_artifact_errors(ws, rnd, art, owner, authors, models, mapped_before))
             items, dupes = labeled_items(art)
             errors.extend(f"{name}: r{rnd:02d} has duplicate label {d}" for d in dupes)
             post_adoption = arel not in legacy
@@ -444,6 +490,143 @@ def record(repo):
         errors.append("AGENTS.md has no 'Standards: reviewer-agent-gateway@<commit>' pin")
     check_links(repo, errors)
     check_budgets(repo, errors)
+    return errors
+
+
+def owner_heads(ws):
+    """The owners an Owner line names, lower case ("sponsor's GitHub Copilot agent" -> copilot)."""
+    heads = set()
+    for value in ws.header.get("Owner", []):
+        head = re.split(r"[(;,]", value, maxsplit=1)[0].strip()
+        m = re.fullmatch(r"(?:the )?(?:sponsor|user)'s (?:github )?(\w+) agent", head, re.I)
+        heads.add((m.group(1) if m else head).lower())
+    return heads
+
+
+def legacy_owner_map(repo, sets, errors):
+    """The date of the one user Decisions entry, across the repository's workstreams,
+    that maps legacy '--owner codex' artifacts of Copilot work to Copilot (D10)."""
+    found = [(day, ws.path.relative_to(repo)) for ws in sets for day, text in decision_entries(ws)
+             if LEGACY_MAP.search(text)]
+    if len(found) > 1:
+        errors.append(f"more than one 'Legacy owner map' Decisions entry: {', '.join(str(w) for _, w in found)}")
+    return found[0][0] if found else None
+
+
+def first_added(repo, rel):
+    """Date of the commit that first added rel, following renames; None if unknown."""
+    code, out = git(repo, "log", "--follow", "--diff-filter=A", "--format=%cs", "--", rel)
+    return out.split()[-1] if code == 0 and out.split() else None
+
+
+def is_integration(tid):
+    return bool(INTEGRATION_ID.match(tid))
+
+
+def task_errors(ws, registry):
+    """Task-table rows are complete and resolvable (D2); a batch row carries its
+    members' identity (D6); an integration row I<n> reviews main@<commit> and
+    carries the identity of the merged tasks it covers (D7)."""
+    errors = []
+    for tid, row in ws.tasks.items():
+        if not row["authors"] or not row["models"]:
+            errors.append(f"task {tid} needs an Author and Author-models")
+        for a in row["authors"]:
+            if a not in registry["channels"]:
+                errors.append(f"task {tid}: unknown author {a!r}")
+        for m in row["models"]:
+            try:
+                agents.model_vendor(registry, m)
+            except agents.IdentityError as exc:
+                errors.append(f"task {tid}: {exc}")
+        state, integ = row["state"], is_integration(tid)
+        if state not in TASK_STATES:
+            errors.append(f"task {tid}: state must be one of {', '.join(TASK_STATES)} (got {state!r})")
+        if integ:
+            if state == "batch" or not row["covers"]:
+                errors.append(f"integration task {tid} needs Covers and may not be a batch")
+            if not re.fullmatch(r"main@[0-9a-f]{7,40}", row["branch"]):
+                errors.append(f"integration task {tid}: Branch must be main@<commit reviewed>")
+        else:
+            if row["covers"] and state != "batch":
+                errors.append(f"task {tid}: only batch rows and integration rows (I<n>) have Covers")
+            if state not in ("planned", "batch") and not row["branch"].strip("-— "):
+                errors.append(f"task {tid}: a {state} task needs its Branch")
+            if state in ("draft", "ready", "merged") and not row["pr"].strip("-— "):
+                errors.append(f"task {tid}: a {state} task needs its PR")
+        missing = set()
+        for c in row["covers"]:
+            other = ws.tasks.get(c)
+            if not other or is_integration(c) or other["state"] == "batch" or c == tid:
+                errors.append(f"task {tid} covers {c!r}, which is not a task row")
+                continue
+            if integ and other["state"] != "merged":
+                errors.append(f"task {tid} covers {c}, which is not merged")
+            missing |= set(other["models"]) - set(row["models"])
+            missing |= {"author " + a for a in set(other["authors"]) - set(row["authors"])}
+        if missing:
+            errors.append(f"task {tid} omits {', '.join(sorted(missing))} of the tasks it covers")
+    return errors
+
+
+def copilot_artifact_errors(ws, rnd, art, owner, authors, models, mapped_before):
+    """Artifact identity matches the workstream for Copilot work (D10). Any
+    artifact naming a task in the Tasks table must match that row, whoever
+    the recorded owner is."""
+    heads = owner_heads(ws)
+    task = artifact_task(art)
+    row = ws.tasks.get(task) if task else None
+    copilot = owner == "copilot" or "copilot" in authors
+    if not copilot and not row and "copilot" not in heads:
+        return []
+    errors = []
+    tag = f"r{rnd:02d}"
+    effective = owner
+    if owner == "codex" and "codex" not in heads and "copilot" in heads:
+        # Owner record only: a mapped legacy artifact predates --task and
+        # --author-model, so its author models stay unknown (D10).
+        added = first_added(ws.repo, str(art.relative_to(ws.repo)))
+        if mapped_before and added and added <= mapped_before:
+            effective = "copilot"
+    if effective and effective not in heads:
+        errors.append(f"{tag} owner {owner!r} is not an owner named in the workstream's Owner lines")
+    if copilot and not task:
+        errors.append(f"{tag} is Copilot work but records no --task")
+    elif copilot and not row:
+        errors.append(f"{tag} task {task!r} has no row in the Tasks table")
+    if row:
+        if set(models) != set(row["models"]):
+            errors.append(f"{tag} author models {sorted(models)} != task {task} Author-models {sorted(row['models'])}")
+        if not set(row["authors"]) <= set(authors) | {owner}:
+            errors.append(f"{tag} authors {sorted(set(authors) | {owner})} omit task {task} Author {row['authors']}")
+    return errors
+
+
+def integration_errors(ws):
+    """Merged tasks not yet covered by an accepted, committed integration review
+    whose row's Covers is unchanged since that review was committed (D7)."""
+    errors, covered = [], set()
+    wrel = str(ws.path.relative_to(ws.repo))
+    for rnd, rel in sorted(ws.reviews.items()):
+        art = ws.repo / rel
+        tid = artifact_task(art) if art.is_file() else None
+        if not tid or not is_integration(tid) or tid not in ws.tasks or verdict(art) != "accept":
+            continue
+        code, out = git(ws.repo, "log", "--diff-filter=A", "--format=%H", "--", rel)
+        commit = out.split()[-1] if code == 0 and out.split() else None
+        code, then = git(ws.repo, "show", f"{commit}:{wrel}") if commit else (1, "")
+        if code != 0:
+            errors.append(f"r{rnd:02d} integration review is not committed with its workstream")
+            continue
+        old_rows = Workstream.parse_tasks(then)
+        if tid not in old_rows or old_rows[tid]["covers"] != ws.tasks[tid]["covers"] \
+                or old_rows[tid]["branch"] != ws.tasks[tid]["branch"]:
+            errors.append(f"r{rnd:02d}: task {tid} Covers or Branch changed after its review; add a new integration row")
+            continue
+        covered |= set(ws.tasks[tid]["covers"])
+    errors += [f"task {tid} is merged but no accepted integration review covers it"
+               for tid, row in sorted(ws.tasks.items())
+               if row["state"] == "merged" and not is_integration(tid) and tid not in covered]
     return errors
 
 
@@ -572,6 +755,7 @@ def done(repo, wrel):
         if ws.rows[rid]["status"] != "closed":
             errors.append(f"{rid}: status is {ws.rows[rid]['status']!r}, not 'closed'")
         errors.extend(disposition_errors(ws, rid))
+    errors.extend(integration_errors(ws))
     log = ws.section("Log")
     for rnd in sorted(ws.reviews):
         if f"r{rnd:02d}: {CLOSURE}" not in log:
@@ -655,6 +839,9 @@ def main(argv):
         return report(Path(argv[2]).resolve(), "--write-baseline" in argv, "--lower" in argv, mem)
     if mode == "record" and len(argv) == 3:
         errors = record(Path(argv[2]).resolve())
+    elif mode == "integration" and len(argv) == 4:
+        repo = Path(argv[2]).resolve()
+        errors = record(repo) + integration_errors(Workstream(repo, repo / argv[3]))
     elif mode in ("transfer", "done") and len(argv) == 4:
         errors = (transfer if mode == "transfer" else done)(Path(argv[2]).resolve(), argv[3])
     else:

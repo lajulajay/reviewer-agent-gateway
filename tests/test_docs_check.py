@@ -350,7 +350,8 @@ class DocsCheckTest(unittest.TestCase):
         ws = self.f.repo / "workstreams" / "x.md"
         self.f.workstream(GOOD_ROWS)
         ws.write_text(ws.read_text().replace("Owner: Claude (2026-10-03)",
-                                             "Owner: sponsor's GitHub Copilot agent (user-assigned 2026-11-20)"))
+                                             "Owner: sponsor's GitHub Copilot agent (user-assigned 2026-11-20)\n"
+                                             "Owner: Claude (from Copilot, 2026-11-21)"))
         code, out = self.record()
         self.assertEqual(code, 0, out)
         # An artifact whose recorded reviewer shares a vendor with its owner
@@ -392,6 +393,163 @@ class DocsCheckTest(unittest.TestCase):
                 self.assertIn(f"{name[-6:-3]} breaks reviewer independence", out)
                 (self.f.repo / ".collab" / name).unlink()
                 (self.f.repo / ".collab" / (name + ".sha256")).unlink()
+
+    # ------------------------------------------------------- Copilot tasks (D7, D10)
+
+    def copilot_ws(self, tasks, reviews, decisions="", owner="Owner: Copilot (coordinator, 2026-11-21)"):
+        rows = "".join(f"| {' | '.join(r)} |\n" for r in tasks)
+        extra = ("## Tasks\n\n| Task | Author | Author-models | Branch | PR | State | Covers |\n"
+                 "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n" + rows)
+        self.f.workstream([], reviews=reviews, decisions=decisions, extra=extra)
+        ws = self.f.repo / "workstreams" / "x.md"
+        ws.write_text(ws.read_text().replace("Owner: Claude (2026-10-03)", owner))
+
+    def task_review(self, name, task, models, owner="copilot", verdict="ACCEPT"):
+        text = CLEAN_ACCEPT.replace("# Codex review", "# Claude review").replace("ACCEPT", verdict)
+        head = f"Owner: {owner}\n" + (f"Author models: {', '.join(models)}\n" if models else "") + (f"Task: {task}\n" if task else "")
+        self.f.artifact(name, text.replace("Owner: claude\n", head))
+        return (name[-6:-3], name, verdict)
+
+    def drop_default_reviews(self):
+        for n in ("codex-x-r01.md", "codex-x-r02.md"):
+            for f in (n, n + ".sha256"):
+                (self.f.repo / ".collab" / f).unlink()
+
+    def test_copilot_artifact_must_match_its_task_row(self):
+        self.drop_default_reviews()
+        t7 = ("T7", "copilot", "gpt-6.1-terra", "b-t7", "pr7", "draft", "")
+        cases = [
+            ([t7], ("T7", ["gpt-6.1-terra"]), None),
+            ([t7], ("T7", ["gpt-6.1-terra", "gpt-6-luna"]), "!= task T7 Author-models"),
+            ([t7], ("T8", ["gpt-6.1-terra"]), "task 'T8' has no row"),
+            ([t7], (None, ["gpt-6.1-terra"]), "records no --task"),
+            ([("T7", "copilot", "auto", "b", "pr", "draft", "")], ("T7", ["gpt-6.1-terra"]), "task T7: model 'auto'"),
+            ([("T7", "copilot", "", "b", "pr", "draft", "")], ("T7", ["gpt-6.1-terra"]), "needs an Author and Author-models"),
+            ([("T7", "copilot", "gpt-6.1-terra", "b", "pr", "shipped", "")], ("T7", ["gpt-6.1-terra"]), "state must be one of"),
+            ([("T7", "kimi2", "gpt-6.1-terra", "b", "pr", "draft", "")], ("T7", ["gpt-6.1-terra"]), "unknown author"),
+            ([("T7", "copilot", "gpt-6.1-terra", "", "pr", "draft", "")], ("T7", ["gpt-6.1-terra"]), "needs its Branch"),
+            ([("T7", "copilot", "gpt-6.1-terra", "b", "", "merged", "")], ("T7", ["gpt-6.1-terra"]), "needs its PR"),
+            ([t7, ("T8", "copilot", "gpt-6.1-terra", "b", "pr", "merged", "T7")], ("T7", ["gpt-6.1-terra"]),
+             "only batch rows and integration rows"),
+            ([t7, t7], ("T7", ["gpt-6.1-terra"]), "duplicate task row T7"),
+            ([t7[:6]], ("T7", ["gpt-6.1-terra"]), "malformed task row"),
+        ]
+        for tasks, (task, models), err in cases:
+            with self.subTest(err=err):
+                r = self.task_review("claude-x-r01.md", task, models)
+                self.copilot_ws(tasks, [r])
+                code, out = self.record()
+                if err is None:
+                    self.assertEqual(code, 0, out)
+                else:
+                    self.assertNotEqual(code, 0, out)
+                    self.assertIn(err, out)
+                for f in ("claude-x-r01.md", "claude-x-r01.md.sha256"):
+                    (self.f.repo / ".collab" / f).unlink()
+        # Owner mismatch: a Codex-owned artifact in a workstream only Copilot owns.
+        r = self.task_review("claude-x-r01.md", None, [], owner="codex")
+        self.copilot_ws([t7], [r])
+        self.assertIn("r01 owner 'codex' is not an owner named", self.record()[1])
+        # A non-Copilot owner naming a Copilot task must still match its row.
+        for f in ("claude-x-r01.md", "claude-x-r01.md.sha256"):
+            (self.f.repo / ".collab" / f).unlink()
+        r = self.task_review("kimi-x-r01.md", "T7", [], owner="claude")
+        self.copilot_ws([t7], [r], owner="Owner: Copilot (2026-11-21)\nOwner: Claude (from Copilot, 2026-11-21)")
+        self.assertIn("r01 author models [] != task T7", self.record()[1])
+
+    def test_batch_rows_carry_member_identity(self):
+        self.drop_default_reviews()
+        t3 = ("T3", "copilot", "gpt-6-luna", "b3", "pr3", "draft", "")
+        t4 = ("T4", "copilot", "gpt-6.1-terra", "b4", "pr4", "planned", "")
+        b1 = ("B1", "copilot", "gpt-6-luna, gpt-6.1-terra", "-", "", "batch", "T3, T4")
+        r = self.task_review("claude-x-r01.md", "B1", ["gpt-6-luna", "gpt-6.1-terra"])
+        self.copilot_ws([t3, t4, b1], [r])
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+        short = ("B1", "copilot", "gpt-6-luna", "-", "", "batch", "T3, T4")
+        r = self.task_review("claude-x-r01.md", "B1", ["gpt-6-luna"])
+        self.copilot_ws([t3, t4, short], [r])
+        self.assertIn("task B1 omits gpt-6.1-terra", self.record()[1])
+
+    def test_integration_gate(self):
+        self.drop_default_reviews()
+        gate = lambda: run("integration", self.f.repo, "workstreams/x.md")
+        t6 = ("T6", "copilot", "gpt-6-luna", "b-t6", "pr6", "merged", "")
+        t7 = ("T7", "copilot", "gpt-6.1-terra", "b-t7", "pr7", "merged", "")
+        reviews = [self.task_review("claude-x-r01.md", "T6", ["gpt-6-luna"]),
+                   self.task_review("claude-x-r02.md", "T7", ["gpt-6.1-terra"])]
+        self.copilot_ws([t6, t7], reviews)
+        self.f.adopt()
+        self.assertEqual(self.record()[0], 0, self.record()[1])
+        code, out = gate()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("task T6 is merged but no accepted integration review covers it", out)
+        self.assertIn("task T7 is merged", out)
+        i1 = ("I1", "copilot", "gpt-6-luna, gpt-6.1-terra", "main@abcdef1", "", "ready", "T6, T7")
+        # A rejected integration review does not open the gate.
+        rej = self.task_review("claude-x-r03.md", "I1", ["gpt-6-luna", "gpt-6.1-terra"], verdict="REJECT")
+        self.f.artifact("claude-x-r03.md", (self.f.repo / ".collab" / "claude-x-r03.md").read_text()
+                        .replace(A, "F1 [minor]: x.\n" + A))
+        self.copilot_ws([t6, t7, i1], reviews + [rej])
+        code, out = gate()
+        self.assertIn("task T6 is merged but no accepted", out)
+        ok = self.task_review("claude-x-r04.md", "I1", ["gpt-6-luna", "gpt-6.1-terra"])
+        self.copilot_ws([t6, t7, i1], reviews + [rej, ok])
+        # Uncommitted, the accepted review does not count; committed with its row, it does.
+        self.assertIn("integration review is not committed", gate()[1])
+        git(self.f.repo, "add", "-A")
+        git(self.f.repo, "commit", "-q", "-m", "i1")
+        code, out = gate()
+        self.assertIn("R03-F1", out)  # the record is part of the gate
+        self.assertNotIn("is merged but", out)
+        # Widening Covers after the review does not cover the new task.
+        t8 = ("T8", "copilot", "gpt-6.1-terra", "b-t8", "pr8", "merged", "")
+        wide = ("I1", "copilot", "gpt-6-luna, gpt-6.1-terra", "main@abcdef1", "", "ready", "T6, T7, T8")
+        self.copilot_ws([t6, t7, t8, wide], reviews + [rej, ok])
+        out = gate()[1]
+        self.assertIn("I1 Covers or Branch changed after its review", out)
+        self.assertIn("task T8 is merged but", out)
+        # A batch row is not an integration review, nor is a task that names Covers.
+        b1 = ("B1", "copilot", "gpt-6-luna, gpt-6.1-terra", "-", "", "batch", "T6, T7")
+        bat = self.task_review("claude-x-r05.md", "B1", ["gpt-6-luna", "gpt-6.1-terra"])
+        self.copilot_ws([t6, t7, b1], reviews + [rej, ok, bat])
+        git(self.f.repo, "add", "-A")
+        git(self.f.repo, "commit", "-q", "-m", "b1")
+        self.assertIn("task T6 is merged but", gate()[1])
+        bad = [
+            (("I1", "copilot", "gpt-6-luna", "main@abcdef1", "", "ready", "T6, T7"), "omits gpt-6.1-terra"),
+            (("I1", "copilot", "gpt-6-luna, gpt-6.1-terra", "main@abcdef1", "", "ready", "T6, T9"), "covers 'T9', which is not a task row"),
+            (("I1", "copilot", "gpt-6-luna, gpt-6.1-terra", "main", "", "ready", "T6, T7"), "Branch must be main@"),
+            (("I1", "copilot", "gpt-6-luna, gpt-6.1-terra", "main@abcdef1", "", "batch", "T6, T7"), "may not be a batch"),
+        ]
+        for row, err in bad:
+            with self.subTest(err=err):
+                self.copilot_ws([t6, t7, row], reviews)
+                self.assertIn(err, self.record()[1])
+        draft = ("T7", "copilot", "gpt-6.1-terra", "b-t7", "pr7", "draft", "")
+        self.copilot_ws([t6, draft, i1], reviews)
+        self.assertIn("covers T7, which is not merged", self.record()[1])
+
+    def test_legacy_owner_map(self):
+        self.drop_default_reviews()
+        r = self.task_review("claude-x-r01.md", None, [], owner="codex")
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        entry = lambda d: (f'- {d}, user, scope: legacy owners.\n  Quote: "map them". '
+                           "Legacy owner map: codex -> copilot. Supersedes: none.\n")
+        self.copilot_ws([], [r])
+        self.f.adopt()
+        self.assertIn("r01 owner 'codex' is not an owner named", self.record()[1])
+        self.copilot_ws([], [r], decisions=entry(today))
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+        self.copilot_ws([], [r], decisions=entry(yesterday))
+        self.assertIn("r01 owner 'codex' is not an owner named", self.record()[1])
+        # One entry per repository.
+        self.copilot_ws([], [r], decisions=entry(today))
+        (self.f.repo / "workstreams" / "y.md").write_text(
+            "# Y\n\nWorkstream: y\nOwner: Claude (2026-11-21)\nStatus: active\n\n## Decisions\n\n" + entry(today))
+        self.assertIn("more than one 'Legacy owner map'", self.record()[1])
 
     def test_broken_link(self):
         self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
