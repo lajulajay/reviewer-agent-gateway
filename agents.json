@@ -2,7 +2,7 @@
   "channels": {
     "claude":  {"vendors": ["anthropic"], "can_own": true,  "can_review": true},
     "codex":   {"vendors": ["openai"],    "can_own": true,  "can_review": true},
-    "copilot": {"vendors": "by-model",    "can_own": true,  "can_review": false},
+    "copilot": {"vendors": "by-model",    "can_own": true,  "can_review": true},
     "kimi":    {"vendors": ["moonshot"],  "can_own": false, "can_review": true},
     "gemini":  {"vendors": ["google"],    "can_own": false, "can_review": true}
   },

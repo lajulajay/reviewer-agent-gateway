@@ -1,0 +1,12 @@
+{
+  "provider": "gemini",
+  "cli": "agy",
+  "owner": "claude",
+  "requested_model": "hard",
+  "preflight_selected_model": "gemini-3.8-flash-high",
+  "reason": "Gemini weekly quota remaining (0) is below the 0.15 floor",
+  "exit_code": 78,
+  "elapsed_seconds": 3,
+  "stdout": "",
+  "stderr": ""
+}

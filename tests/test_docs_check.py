@@ -363,6 +363,36 @@ class DocsCheckTest(unittest.TestCase):
         self.assertIn("r01 breaks reviewer independence", out)
         self.assertNotIn("Owner must name", out)
 
+    def test_copilot_artifact_is_checked_by_its_selected_model(self):
+        def copilot(text, model):
+            return (text.replace("# Codex review", "# Copilot review")
+                        .replace("Owner: claude\n", f"Owner: claude\nSelected model: {model}\nReviewer vendor: x\n"))
+        base = [("r01", "codex-x-r01.md", "REJECT"), ("r02", "codex-x-r02.md", "REJECT")]
+        r03 = base + [("r03", "copilot-x-r03.md", "ACCEPT")]
+        self.f.artifact("copilot-x-r03.md", copilot(CLEAN_ACCEPT, "gpt-6-luna"))
+        self.f.workstream(GOOD_ROWS, reviews=r03)
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+        # Labeled items in a Copilot artifact are read like any other review.
+        (self.f.repo / ".collab" / "copilot-x-r03.md").chmod(0o644)
+        self.f.artifact("copilot-x-r03.md", copilot(CLEAN_ACCEPT.replace(A, "F1 [minor]: wording.\n" + A), "gpt-6-luna"))
+        code, out = self.record()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("R03-F1", out)
+        # A Claude model reviewing Claude-owned work fails, as does a missing model.
+        for name, model in (("copilot-x-r04.md", "claude-haiku-5.5"), ("copilot-x-r05.md", None)):
+            with self.subTest(model=model):
+                text = copilot(CLEAN_ACCEPT, model or "")
+                if model is None:
+                    text = text.replace("Selected model: \n", "")
+                self.f.artifact(name, text)
+                self.f.workstream(GOOD_ROWS, reviews=base + [(name[-6:-3], name, "ACCEPT")])
+                code, out = self.record()
+                self.assertNotEqual(code, 0, out)
+                self.assertIn(f"{name[-6:-3]} breaks reviewer independence", out)
+                (self.f.repo / ".collab" / name).unlink()
+                (self.f.repo / ".collab" / (name + ".sha256")).unlink()
+
     def test_broken_link(self):
         self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
         self.assertIn("does not resolve", self.record()[1])

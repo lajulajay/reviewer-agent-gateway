@@ -25,7 +25,7 @@ BASELINE = "docs-baseline.json"
 BUDGET = {"STATUS.md": 4000, "AGENTS.md": 12000, "PROTOCOL.md": 12000,
           "CLAUDE.md:stub": 1500, "workstream": 30000, "T2": 60000,
           "memory:index": 2000, "memory:entry": 1500, "memory:total": 15000}
-REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Kimi review")
+REVIEW_HEADERS = ("# Claude review", "# Codex review", "# Copilot review", "# Kimi review")
 FINDING = re.compile(r"^\s*(?:[-*]\s*)?\**F(\d+)\**\s*\[(blocker|major|minor)\]")
 CONDITION = re.compile(r"^\s*(?:[-*]\s*)?\**C(\d+)\**\s*:")
 VALIDATOR = GATEWAY / "reviewer-validate.py"
@@ -64,18 +64,21 @@ def artifact_text(path):
 
 
 def artifact_identity(path):
-    """Return (reviewer, owner, authors, author_models) recorded by the wrapper."""
+    """Return (reviewer, owner, authors, author_models, reviewer_model) recorded by
+    the wrapper. reviewer_model is the selected model, which sets the vendor of a
+    multi-vendor reviewer channel (Copilot)."""
     reviewer = path.name.split("-", 1)[0]
     if path.suffix == ".json":
         try:
             meta = json.loads(path.read_text(errors="replace")).get("reviewer_metadata") or {}
         except json.JSONDecodeError:
             meta = {}
-        return reviewer, meta.get("owner") or None, list(meta.get("authors") or []), list(meta.get("author_models") or [])
+        return (reviewer, meta.get("owner") or None, list(meta.get("authors") or []),
+                list(meta.get("author_models") or []), meta.get("selected_model") or None)
     head = path.read_text(errors="replace").split("\n\n", 2)[:2]
-    fields = dict(m.groups() for m in re.finditer(r"(?m)^(Owner|Authors|Author models): (.+)$", "\n".join(head)))
+    fields = dict(m.groups() for m in re.finditer(r"(?m)^(Owner|Authors|Author models|Selected model): (.+)$", "\n".join(head)))
     split = lambda key: [v.strip() for v in fields.get(key, "").split(",") if v.strip()]
-    return reviewer, fields.get("Owner"), split("Authors"), split("Author models")
+    return reviewer, fields.get("Owner"), split("Authors"), split("Author models"), fields.get("Selected model")
 
 
 def is_review_artifact(path):
@@ -383,9 +386,9 @@ def record(repo):
                         errors.append(f"{name}: {frel} was modified, deleted, or renamed after its first commit")
                     if len(git(repo, "log", "--format=%H", "--diff-filter=A", "--", frel)[1].split()) > 1:
                         errors.append(f"{name}: {frel} was added more than once (replaced)")
-            reviewer, owner, authors, models = artifact_identity(art)
+            reviewer, owner, authors, models, reviewer_model = artifact_identity(art)
             try:
-                agents.check(registry, reviewer, owner, authors, models)
+                agents.check(registry, reviewer, owner, authors, models, reviewer_model)
             except agents.IdentityError as exc:
                 errors.append(f"{name}: r{rnd:02d} breaks reviewer independence: {exc}")
             items, dupes = labeled_items(art)

@@ -1,0 +1,30 @@
+{
+  "status": "proposed 2026-11-21; the tier x vendor mapping is the sponsor's decision before merge",
+  "max_prompt_bytes": 400000,
+  "tiers": {
+    "hard": {
+      "max_ai_credits": 60,
+      "vendor_order": ["anthropic", "openai", "google", "moonshot", "xai", "microsoft"],
+      "models": {
+        "anthropic": "claude-sonnet-5.5",
+        "openai": "gpt-6.1-terra",
+        "google": "gemini-4-hydrogen",
+        "moonshot": "kimi-k3",
+        "xai": "grok-4.7",
+        "microsoft": "mai-code-2"
+      }
+    },
+    "routine": {
+      "max_ai_credits": 30,
+      "vendor_order": ["anthropic", "openai", "google", "microsoft", "xai", "moonshot"],
+      "models": {
+        "anthropic": "claude-haiku-5.5",
+        "openai": "gpt-6-luna",
+        "google": "gemini-3.8-flash",
+        "microsoft": "mai-code-2-flash",
+        "xai": "grok-4.6",
+        "moonshot": "kimi-k3"
+      }
+    }
+  }
+}

@@ -54,7 +54,8 @@ workstream `Owner:` line against the registry.
 Active roles: Claude, Codex, and Copilot own work; Kimi is reviewer-only.
 Kimi, Claude, and Codex are official reviewers when active in
 `reviewer-roster.json`, and Gemini is always the fallback reviewer, never an
-owner. Copilot is not yet a reviewer channel. Remove a reviewer from `active_reviewers` when its subscription lapses
+owner. Copilot reviews only when called directly (`copilot-review.sh`); it is
+not in `reviewer-roster.json` or automatic selection yet. Remove a reviewer from `active_reviewers` when its subscription lapses
 and restore it when renewed; `tie_break_order` must continue to list all three
 subscription reviewers.
 
@@ -207,6 +208,47 @@ requested tier, selected model, and effort, and says the resolved model was
 not reported. `CODEX_MAX_TIME_SECONDS` bounds the call (default 600).
 `CODEX_REVIEW_MODEL_POLICY` may point to another policy file for an isolated
 test.
+
+## Copilot reviews through the Copilot CLI
+
+`copilot-review.sh` reviews on the user's Copilot plan with a model chosen by
+tier and vendor in `copilot-model-policy.json`. The reviewer's vendor is that
+model's vendor, so the vendor rule applies per model: Copilot may review Claude
+work through an OpenAI model, never through a Claude model. Without `--vendor`
+the wrapper takes the first vendor in the tier's `vendor_order` that the rule
+allows; with `--vendor V` it uses that vendor's model or refuses (exit 64).
+Copilot-owned work needs `--author-model` for every model that wrote it, and
+every one of those vendors is skipped. Mappings (sponsor-approved 2026-11-21):
+
+| Tier | Vendor order and models | AI-credit cap per call |
+| :--- | :--- | :--- |
+| `hard` | Anthropic `claude-sonnet-5.5`, OpenAI `gpt-6.1-terra`, Google `gemini-4-hydrogen`, Moonshot `kimi-k3`, xAI `grok-4.7`, Microsoft `mai-code-2` | 60 |
+| `routine` | Anthropic `claude-haiku-5.5`, OpenAI `gpt-6-luna`, Google `gemini-3.8-flash`, Microsoft `mai-code-2-flash`, xAI `grok-4.6`, Moonshot `kimi-k3` | 30 |
+
+`copilot-model-select.py` checks that each mapped model belongs to its listed
+vendor in `agents.json` (exit 78 otherwise). `--owner` is required. The CLI
+runs with the prompt on stdin in an empty temporary directory and an empty
+temporary `COPILOT_HOME` with plugin discovery off, so no user MCP
+configuration, plugin, custom agent or saved session loads (sign-in comes from
+the system credential store). Every tool is hidden and denied
+(`--available-tools` plus `--deny-tool` for shell, write, read, memory and
+url), built-in and named MCP servers are disabled, and custom instructions,
+temp-dir access, questions, session sync and auto-update are off.
+`--max-ai-credits` comes from the tier (the CLI's minimum is 30).
+`COPILOT_PROVIDER_*` and `COPILOT_MODEL` overrides are refused.
+
+The review fails with exit 70 on any tool event or tool request (a message's
+`serverTools` may only name its provider), an enabled MCP server, anything
+other than exactly one successful `result` as the final event, or a final reply
+that is empty or incomplete. A reply arrives as chunk messages sharing
+`originatingMessageId` and `apiCallId`; all `chunkCount` chunks must be present,
+and an earlier reply is never used in place of an incomplete final one. Exit 74
+means a message named no model or a model other than the selected one. Any exit
+after the call began that left no artifact still writes a diagnostic, so the
+attempt counts toward the budget. The artifact records the selected and
+resolved model, reviewer vendor, CLI version, tool events, token usage, and AI
+credits used against the cap. `COPILOT_MAX_TIME_SECONDS` (default 1800) bounds
+the call. Copilot `hard` counts toward the one hard round per topic.
 
 ## API route for Codex and Kimi
 

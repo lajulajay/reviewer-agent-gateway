@@ -1,0 +1,11 @@
+{
+  "provider": "codex",
+  "owner": "claude",
+  "requested_model": "routine",
+  "selected_model": "gpt-6.1-terra",
+  "reason": "Codex API call failed: API reply rejected: substance validation failed",
+  "exit_code": 70,
+  "elapsed_seconds": 21,
+  "stdout": "",
+  "stderr": "API reply rejected: substance validation failed\n"
+}

@@ -217,7 +217,7 @@ EOF
 # This fixture deliberately passes no arguments, so it cannot invoke a provider.
 consumer_root="$test_root/prediction-markets/shim-consumer"
 mkdir -p "$consumer_root/reviewers" "$test_root/reviewer-agent-gateway"
-for wrapper in claude-review.sh codex-review.sh gemini-review.sh kimi-review.sh auto-review.sh; do
+for wrapper in claude-review.sh codex-review.sh copilot-review.sh gemini-review.sh kimi-review.sh auto-review.sh; do
   cp "$root/$wrapper" "$test_root/reviewer-agent-gateway/$wrapper"
   cat > "$consumer_root/reviewers/$wrapper" <<EOF
 #!/bin/zsh
@@ -696,4 +696,198 @@ api_run ok codex ../../outside.md 65
 api_run ok kimi kimi-api-self.md 0
 set +e; env API_MOCK_MODE=ok "KIMI_REVIEW_MODEL_POLICY=$test_root/kimi-api-policy.json" "$root/kimi-review.sh" --packet-root "$test_root" --owner claude --author-model kimi-k3 routine "$test_root/prompt.md" "$api_repo/.collab/kimi-api-vendor.md" "$test_root/packet/source.md" >/dev/null 2>&1; code=$?; set -e
 [[ $code -eq 64 && ! -e "$api_repo/.collab/kimi-api-vendor.diagnostic.json" ]] || { print -u2 "API route skipped the vendor rule ($code)"; exit 1; }
+# Copilot: the reviewer vendor is the selected model's vendor; any tool event,
+# enabled MCP server or other resolved model fails the review.
+cat > "$test_root/bin/copilot" <<'EOF'
+#!/bin/zsh
+[[ "$1" != --version ]] || { print 'GitHub Copilot CLI 1.0.114'; exit 0; }
+[[ -z "${COPILOT_MOCK_ARGS:-}" ]] || print -r -- "$*" > "$COPILOT_MOCK_ARGS"
+model=""; usage=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in --model) model="$2"; shift ;; --usage-output-file) usage="$2"; shift ;; esac
+  shift
+done
+cat > "${COPILOT_MOCK_PROMPT:-/dev/null}"
+[[ -z "${COPILOT_MOCK_PWD:-}" ]] || print -r -- "$PWD home=${COPILOT_HOME:-} plugin_dir_only=${COPILOT_PLUGIN_DIR_ONLY:-}" > "$COPILOT_MOCK_PWD"
+mode="${COPILOT_TEST_MODE:-success}"
+[[ "$mode" != fail ]] || exit 3
+[[ "$mode" != hang ]] || sleep 30
+served="$model"; [[ "$mode" != mismatch ]] || served="claude-sonnet-5.5"
+mcp=disabled; [[ "$mode" != mcp ]] || mcp=connected
+body=""
+for i in {1..8}; do body+="The supplied packet is internally consistent and the proposed boundary is testable. "; done
+body+=$'\n\nATTESTATION: all actionable findings and conditions are labeled.\n\nVERDICT: ACCEPT'
+half=$(( ${#body} / 2 ))
+jq -nc --arg s "$mcp" '{type:"session.mcp_servers_loaded",data:{servers:[{name:"github-mcp-server",status:$s}]}}'
+[[ "$mode" != tool ]] || jq -nc '{type:"tool.execution_start",data:{toolName:"read"}}'
+reqs='[]'; [[ "$mode" != toolreq ]] || reqs='[{"name":"shell"}]'
+server='{"provider":"openai-responses"}'; [[ "$mode" != servertool ]] || server='{"provider":"openai-responses","webSearch":{}}'
+# One reply as three chunk messages (an empty one first), emitted out of order:
+# the wrapper must group them by originatingMessageId and join by chunkIndex.
+chunk() { jq -nc --arg id "$1" --argjson ci "$2" --argjson cc "${5:-$cc}" --arg m "$served" --arg c "$3" --argjson r "$4" --argjson st "$server" --arg o "${6:-u1}" \
+  --argjson nomodel "$([[ "$mode" == nomodel* && "$1" == m3 ]] && print true || print false)" \
+  --argjson nokey "$([[ "$mode" == nokey ]] && print true || print false)" \
+  '{type:"assistant.message",data:{messageId:$id,originatingMessageId:$o,apiCallId:"a1",chunkIndex:$ci,chunkCount:$cc,model:$m,content:$c,toolRequests:$r,serverTools:$st}}
+   | if $nomodel then del(.data.model) else . end | if $nokey then del(.data.messageId, .data.originatingMessageId) else . end'; }
+cc=3; [[ "$mode" != incomplete && "$mode" != nomodel-incomplete ]] || cc=4
+# An earlier chunk of the final reply's key, separated from it by another reply: never stitched in.
+[[ "$mode" != splitkey ]] || { chunk m0 1 "${body:0:$half}" '[]'; chunk x1 0 "other reply" '[]' 1 u9; }
+chunk m3 2 "${body:$half}" '[]' "$([[ "$mode" == countmismatch ]] && print 4 || print $cc)"
+chunk m1 0 "" '[]'
+chunk m2 1 "${body:0:$half}" "$reqs"
+# A newer reply whose only chunk so far is empty: the wrapper must not fall back to the earlier reply.
+[[ "$mode" != staleempty ]] || chunk m4 0 "" '[]' 2 u2
+[[ "$mode" == noresult ]] || jq -nc '{type:"result",exitCode:0}'
+[[ "$mode" != doubleresult ]] || jq -nc '{type:"result",exitCode:1}'
+[[ "$mode" != afterresult ]] || jq -nc '{type:"assistant.idle",data:{}}'
+[[ -z "$usage" ]] || print '{"totalNanoAiu":2500000000,"tokenDetails":{"input":10,"output":20}}' > "$usage"
+exit 0
+EOF
+chmod 755 "$test_root/bin/copilot"
+jq '.max_prompt_bytes = 10' "$root/copilot-model-policy.json" > "$test_root/copilot-small-policy.json"
+copilot_repo="$test_root/copilot-repo"; copilot_fail_repo="$test_root/copilot-fail-repo"; mkdir -p "$copilot_repo/.collab" "$copilot_fail_repo/.collab"
+copilot_args="$test_root/copilot-args"; copilot_prompt="$test_root/copilot-prompt"; copilot_pwd="$test_root/copilot-pwd"
+copilot_review() {
+  local repo="$1" tier="$2" output="$3"; shift 3
+  : > "$copilot_args"
+  PATH="$test_root/bin:$PATH" COPILOT_MOCK_ARGS="$copilot_args" COPILOT_MOCK_PROMPT="$copilot_prompt" COPILOT_MOCK_PWD="$copilot_pwd" \
+    "$root/copilot-review.sh" --packet-root "$test_root" "$@" "$tier" "$test_root/prompt.md" "$repo/.collab/$output" "$test_root/packet/source.md"
+}
+copilot_fails() {
+  # copilot_fails EXIT OUTPUT [VAR=value]...: a routine review owned by claude, with the mock's settings.
+  local expected="$1" output="$2"; shift 2
+  # A repository per case keeps the daily per-provider cap out of the way; checks after a call use this path.
+  copilot_fail_repo="$test_root/copilot-fail-${output%.md}"; mkdir -p "$copilot_fail_repo/.collab"
+  set +e; ( for kv in "$@"; do export "$kv"; done; copilot_review "$copilot_fail_repo" routine "$output" --owner claude ) >/dev/null 2>&1
+  local code=$?; set -e
+  [[ $code -eq $expected && ! -e "$copilot_fail_repo/.collab/$output" ]] \
+    || { print -u2 "copilot $output: expected exit $expected, got $code"; exit 1; }
+}
+copilot_review "$copilot_repo" hard copilot-2026-11-21-hard.md --owner claude --task T9 >/dev/null
+for flag in '--model gpt-6.1-terra' '--available-tools=gateway_no_tools' '--deny-tool=shell' '--deny-tool=read' '--deny-tool=url' \
+  '--disable-builtin-mcps' '--no-custom-instructions' '--disallow-temp-dir' '--no-ask-user' '--max-ai-credits 60' '--output-format json'; do
+  grep -F -- "$flag" "$copilot_args" >/dev/null || { print -u2 "copilot argv missing: $flag"; exit 1; }
+done
+grep -F 'Safe packet fixture.' "$copilot_prompt" >/dev/null
+read -r copilot_cwd copilot_env_home copilot_env_plugins < "$copilot_pwd"
+copilot_env_home="${copilot_env_home#home=}"
+[[ "$copilot_cwd" == */workspace && "${copilot_env_home:a}" == "${${copilot_cwd%/workspace}:a}/home" && "$copilot_env_plugins" == plugin_dir_only=true ]] \
+  || { print -u2 "copilot did not run in a private workspace and home: $(<"$copilot_pwd")"; exit 1; }
+[[ ! -e "$copilot_cwd" ]] || { print -u2 "copilot temporary workspace was not removed"; exit 1; }
+for line in 'Owner: claude' 'Task: T9' 'Requested model: hard' 'Selected model: gpt-6.1-terra' 'Reviewer vendor: openai' \
+  'Resolved model(s): gpt-6.1-terra' 'CLI version: GitHub Copilot CLI 1.0.114' 'Tool events: 0' 'AI credits: 2.5 AI credits (cap 60)'; do
+  grep -Fx -- "$line" "$copilot_repo/.collab/copilot-2026-11-21-hard.md" >/dev/null || { print -u2 "copilot-hard missing: $line"; exit 1; }
+done
+grep -F 'testable. The supplied' "$copilot_repo/.collab/copilot-2026-11-21-hard.md" >/dev/null
+[[ -s "$copilot_repo/.collab/copilot-2026-11-21-hard.md.sha256" ]]
+# Copilot-owned work: every author model's vendor is skipped.
+copilot_review "$copilot_repo" routine copilot-2026-11-21-own.md --owner copilot --author-model gpt-6-luna >/dev/null
+grep -F -- '--model claude-haiku-5.5' "$copilot_args" >/dev/null
+copilot_review "$copilot_repo" routine copilot-2026-11-21-forced.md --owner claude --vendor xai >/dev/null
+grep -Fx 'Selected model: grok-4.6' "$copilot_repo/.collab/copilot-2026-11-21-forced.md" >/dev/null
+# Vendor refusals happen before any call and leave no diagnostic.
+for args in "--owner claude --vendor anthropic" "--owner copilot" "--owner copilot --author-model claude-sonnet-5.5 --vendor anthropic"; do
+  set +e; copilot_review "$copilot_fail_repo" routine copilot-2026-11-21-vendor.md ${=args} >/dev/null 2>&1; code=$?; set -e
+  [[ $code -eq 64 && ! -s "$copilot_args" && ! -e "$copilot_fail_repo/.collab/copilot-2026-11-21-vendor.diagnostic.json" ]] \
+    || { print -u2 "copilot vendor rule ($args): got $code"; exit 1; }
+done
+copilot_fails 70 copilot-2026-11-21-tool.md COPILOT_TEST_MODE=tool
+jq -e '.model_invocation_began == true and .selected_model == "gpt-6-luna" and .reviewer_vendor == "openai" and (.reason | contains("tool events"))' \
+  "$copilot_fail_repo/.collab/copilot-2026-11-21-tool.diagnostic.json" >/dev/null
+copilot_fails 70 copilot-2026-11-21-toolreq.md COPILOT_TEST_MODE=toolreq
+copilot_fails 70 copilot-2026-11-21-servertool.md COPILOT_TEST_MODE=servertool
+copilot_fails 70 copilot-2026-11-21-mcp.md COPILOT_TEST_MODE=mcp
+jq -e '.reason | contains("MCP server")' "$copilot_fail_repo/.collab/copilot-2026-11-21-mcp.diagnostic.json" >/dev/null
+copilot_fails 74 copilot-2026-11-21-mismatch.md COPILOT_TEST_MODE=mismatch
+copilot_fails 70 copilot-2026-11-21-noresult.md COPILOT_TEST_MODE=noresult
+copilot_fails 70 copilot-2026-11-21-doubleresult.md COPILOT_TEST_MODE=doubleresult
+copilot_fails 70 copilot-2026-11-21-afterresult.md COPILOT_TEST_MODE=afterresult
+copilot_fails 70 copilot-2026-11-21-countmismatch.md COPILOT_TEST_MODE=countmismatch
+copilot_fails 70 copilot-2026-11-21-staleempty.md COPILOT_TEST_MODE=staleempty
+copilot_fails 74 copilot-2026-11-21-nomodel.md COPILOT_TEST_MODE=nomodel
+jq -e '.reason | contains("did not name its model")' "$copilot_fail_repo/.collab/copilot-2026-11-21-nomodel.diagnostic.json" >/dev/null
+copilot_fails 74 copilot-2026-11-21-nomodel-incomplete.md COPILOT_TEST_MODE=nomodel-incomplete
+jq -e '.reason | contains("did not name its model")' "$copilot_fail_repo/.collab/copilot-2026-11-21-nomodel-incomplete.diagnostic.json" >/dev/null
+copilot_fails 70 copilot-2026-11-21-nokey.md COPILOT_TEST_MODE=nokey
+copilot_fails 70 copilot-2026-11-21-splitkey.md COPILOT_TEST_MODE=splitkey
+jq -e '.reason | contains("extraction")' "$copilot_fail_repo/.collab/copilot-2026-11-21-splitkey.diagnostic.json" >/dev/null
+copilot_fails 70 copilot-2026-11-21-incomplete.md COPILOT_TEST_MODE=incomplete
+jq -e '.reason | contains("extraction")' "$copilot_fail_repo/.collab/copilot-2026-11-21-incomplete.diagnostic.json" >/dev/null
+copilot_fails 70 copilot-2026-11-21-nonzero.md COPILOT_TEST_MODE=fail
+copilot_fails 70 copilot-2026-11-21-timeout.md COPILOT_TEST_MODE=hang COPILOT_MAX_TIME_SECONDS=1
+jq -e '.reason == "Copilot invocation timed out"' "$copilot_fail_repo/.collab/copilot-2026-11-21-timeout.diagnostic.json" >/dev/null
+copilot_fails 78 copilot-2026-11-21-envmodel.md COPILOT_MODEL=gpt-6-luna
+copilot_fails 78 copilot-2026-11-21-envprovider.md COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:1
+jq -e '.model_invocation_began == false' "$copilot_fail_repo/.collab/copilot-2026-11-21-envprovider.diagnostic.json" >/dev/null
+copilot_fails 65 copilot-2026-11-21-oversize.md COPILOT_REVIEW_MODEL_POLICY="$test_root/copilot-small-policy.json"
+set +e; copilot_review "$copilot_fail_repo" routine kimi-2026-11-21-name.md --owner claude >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 65 && ! -s "$copilot_args" ]] || { print -u2 "copilot accepted a non-copilot output name ($code)"; exit 1; }
+# --owner is required; refused before any call.
+rm -f "$copilot_args"
+set +e; ( PATH="$test_root/bin:$PATH" COPILOT_MOCK_ARGS="$copilot_args" "$root/copilot-review.sh" --packet-root "$test_root" routine \
+  "$test_root/prompt.md" "$copilot_fail_repo/.collab/copilot-2026-11-21-noowner.md" "$test_root/packet/source.md" ) >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 64 && ! -e "$copilot_args" && ! -e "$copilot_fail_repo/.collab/copilot-2026-11-21-noowner.diagnostic.json" ]] || { print -u2 "copilot ran without --owner ($code)"; exit 1; }
+# A helper failing after the call still leaves a spent-attempt diagnostic.
+claims_root="$test_root/gateway-claims"; cp -Rp "$root" "$claims_root"
+print 'import sys; sys.exit(3)' > "$claims_root/reviewer-claims.py"
+git -C "$claims_root" -c user.email=t@t -c user.name=t commit -qam 'failing claims helper'
+claims_repo="$test_root/copilot-claims-repo"; mkdir -p "$claims_repo/.collab"
+set +e; PATH="$test_root/bin:$PATH" "$claims_root/copilot-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" \
+  "$claims_repo/.collab/copilot-2026-11-21-claims.md" "$test_root/packet/source.md" >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 70 && ! -e "$claims_repo/.collab/copilot-2026-11-21-claims.md" ]] || { print -u2 "copilot claims failure: got $code"; exit 1; }
+jq -e '.model_invocation_began == true and .exit_code == 70' "$claims_repo/.collab/copilot-2026-11-21-claims.diagnostic.json" >/dev/null
+# A checksum failure at publish leaves no artifact, checksum or staging file, and a spent diagnostic.
+failbin="$test_root/failbin"; mkdir -p "$failbin"; print '#!/bin/sh\nexit 9' > "$failbin/shasum"; chmod 755 "$failbin/shasum"
+sum_repo="$test_root/copilot-sum-repo"; mkdir -p "$sum_repo/.collab"
+set +e; PATH="$failbin:$test_root/bin:$PATH" "$root/copilot-review.sh" --packet-root "$test_root" --owner claude routine "$test_root/prompt.md" \
+  "$sum_repo/.collab/copilot-2026-11-21-sum.md" "$test_root/packet/source.md" >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 70 && -z "$(ls -A "$sum_repo/.collab" | grep -v '^copilot-2026-11-21-sum.diagnostic.json$')" ]] \
+  || { print -u2 "copilot checksum failure: got $code, left: $(ls -A "$sum_repo/.collab")"; exit 1; }
+jq -e '.model_invocation_began == true and (.reason | contains("checksum"))' "$sum_repo/.collab/copilot-2026-11-21-sum.diagnostic.json" >/dev/null
+# Publication: a signal between linking the checksum and the artifact leaves no
+# orphan checksum; a concurrent writer's files are never replaced or removed.
+lnbin="$test_root/lnbin"; mkdir -p "$lnbin"
+cat > "$lnbin/ln" <<'EOF'
+#!/bin/zsh
+n=$(( $(cat "$LN_MOCK_COUNTER" 2>/dev/null || print 0) + 1 )); print $n > "$LN_MOCK_COUNTER"
+case "$LN_MOCK_MODE" in
+  signal) [[ $n -eq 2 ]] && { kill -TERM $PPID; sleep 2; exit 1; } ;;
+  race) [[ $n -eq 1 ]] && print 'other writer' > "$2" ;;
+esac
+exec /bin/ln "$@"
+EOF
+chmod 755 "$lnbin/ln"
+for mode in signal race; do
+  pub_repo="$test_root/copilot-pub-$mode"; mkdir -p "$pub_repo/.collab"; out="$pub_repo/.collab/copilot-2026-11-21-pub.md"
+  set +e; LN_MOCK_MODE=$mode LN_MOCK_COUNTER="$test_root/ln-$mode" PATH="$lnbin:$test_root/bin:$PATH" "$root/copilot-review.sh" --packet-root "$test_root" \
+    --owner claude routine "$test_root/prompt.md" "$out" "$test_root/packet/source.md" >/dev/null 2>&1; code=$?; set -e
+  left="$(ls -A "$pub_repo/.collab" | grep -v '^copilot-2026-11-21-pub.diagnostic.json$' || true)"
+  if [[ $mode == signal ]]; then
+    [[ $code -eq 70 && -z "$left" ]] || { print -u2 "copilot interrupted publication: got $code, left: $left"; exit 1; }
+    jq -e '.reason | contains("SIGTERM")' "$pub_repo/.collab/copilot-2026-11-21-pub.diagnostic.json" >/dev/null
+  else
+    [[ $code -eq 70 && "$left" == copilot-2026-11-21-pub.md.sha256 && "$(<"$out.sha256")" == 'other writer' ]] \
+      || { print -u2 "copilot concurrent publication: got $code, left: $left"; exit 1; }
+  fi
+done
+# Budget: a spent Copilot failure counts as a round; a preflight refusal does not;
+# a Copilot hard round uses the topic's one hard round for every provider.
+[[ "$(python3 "$root/review-budget.py" copilot routine "$claims_repo/.collab/copilot-2026-11-21-claims-r02.md")" == "1 1" ]] \
+  || { print -u2 "spent Copilot failure was not counted"; exit 1; }
+pre_repo="$test_root/copilot-fail-copilot-2026-11-21-envmodel"
+[[ "$(python3 "$root/review-budget.py" copilot routine "$pre_repo/.collab/copilot-2026-11-21-envmodel-r02.md")" == "0 0" ]] \
+  || { print -u2 "Copilot preflight refusal was counted"; exit 1; }
+[[ "$(python3 "$root/review-budget.py" copilot routine "$copilot_repo/.collab/copilot-2026-11-21-hard-r02.md")" == "1 1" ]]
+for provider in copilot codex kimi; do
+  set +e; python3 "$root/review-budget.py" $provider hard "$copilot_repo/.collab/$provider-2026-11-21-hard-r02.md" >/dev/null 2>&1; code=$?; set -e
+  [[ $code -eq 1 ]] || { print -u2 "$provider hard round allowed after a Copilot hard round"; exit 1; }
+done
+set +e; copilot_review "$copilot_repo" hard copilot-2026-11-21-hard-r02.md --owner claude >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 79 && ! -s "$copilot_args" ]] || { print -u2 "second Copilot hard round on a topic: got $code"; exit 1; }
+jq -e '.reason | contains("hard-tier")' "$copilot_repo/.collab/copilot-2026-11-21-hard-r02.diagnostic.json" >/dev/null
+# A spent name is never reused.
+set +e; copilot_review "$copilot_repo" routine copilot-2026-11-21-hard.md --owner claude >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 65 && ! -s "$copilot_args" ]] || { print -u2 "Copilot reused an artifact name ($code)"; exit 1; }
+set +e; copilot_review "$claims_repo" routine copilot-2026-11-21-claims.md --owner claude >/dev/null 2>&1; code=$?; set -e
+[[ $code -eq 65 && ! -s "$copilot_args" ]] || { print -u2 "Copilot reused a diagnostic name ($code)"; exit 1; }
 print "wrapper failure smoke tests passed"

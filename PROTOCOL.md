@@ -72,6 +72,7 @@ which delegate to this gateway:
 ```bash
 reviewers/claude-review.sh --owner <agent> [--author A]... [--author-model M]... [--task ID] <sonnet|opus>    <prompt> .collab/claude-YYYY-MM-DD-topic.md <packet>...
 reviewers/codex-review.sh  --owner <agent> [--author A]... [--author-model M]... [--task ID] <routine|hard>   <prompt> .collab/codex-YYYY-MM-DD-topic.md  <packet>...
+reviewers/copilot-review.sh --owner <agent> [--author A]... [--author-model M]... [--task ID] [--vendor V] <hard|routine> <prompt> .collab/copilot-YYYY-MM-DD-topic.md <packet>...
 reviewers/kimi-review.sh   --owner <agent> [--author A]... [--author-model M]... [--task ID] <hard|routine> <prompt> .collab/kimi-YYYY-MM-DD-topic.md <packet>...
 reviewers/auto-review.sh   --owner <agent> [--author A]... [--author-model M]... [--task ID] <hard|routine> <prompt> .collab/auto-YYYY-MM-DD-topic.md <packet>...
 reviewers/gemini-review.sh --owner <agent> [--author A]... [--author-model M]... [--task ID] <hard|routine> <prompt> .collab/gemini-YYYY-MM-DD-topic.json <packet>...
@@ -82,16 +83,14 @@ repository. Options go
 before the model or tier. For automatic selection of mixed-authorship work,
 repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
 
-For automatic selection, the `auto-` output name is a template; the artifact
-uses the chosen provider's prefix. New topics go to the eligible active reviewer
-with the fewest rounds in that repository today and room under its daily cap,
-roster order breaking ties. Follow-ups
-stay with the topic's latest eligible reviewer when round records establish one
-unambiguous reviewer; otherwise selection falls back to daily balancing. An
-existing artifact or diagnostic is never retried under the same name. The dispatcher fails over only after preflight
-exit 69 or 78, never after a model call, timeout, validation failure, or budget
-refusal; if all candidates fail preflight, use Gemini. The template date must
-be today's local date.
+For automatic selection, the `auto-` output name is a template dated today;
+the artifact uses the chosen provider's prefix. Selection balances daily
+rounds, keeps follow-ups with the topic's reviewer, never retries a name, and
+fails over only after preflight exit 69 or 78; details are in README.md.
+
+Copilot reviews as the vendor of the model it selects by tier from
+`copilot-model-policy.json` (`--vendor` picks one); the vendor rule applies
+to that model. Automatic selection does not yet include Copilot.
 
 Choose the smallest sufficient tier and record the requested tier, selected
 and resolved model(s), and a one-sentence rationale. The higher tier
@@ -117,7 +116,7 @@ Every review call spends the user's plan usage, so the wrappers enforce
   the disagreement escalation above: the competing claims, the evidence,
   Gemini's assessment, and the exact decision needed. No further review runs
   unless the user approves an override.
-- **One hard-tier round per topic** (Claude `opus`, Codex `hard`, or any Kimi
+- **One hard-tier round per topic** (Claude `opus`, Codex or Copilot `hard`, or any Kimi
   call classified as hard by requested tier, K3-family alias, or `high`
   effort); use it where it matters most.
 - **Eight reviews per provider per repository per day.**

@@ -25,7 +25,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-PROVIDERS = ("claude", "codex", "gemini", "kimi")
+PROVIDERS = ("claude", "codex", "copilot", "gemini", "kimi")
 NAME = re.compile(r"^(%s)-(?:(\d{4}-\d{2}-\d{2})-)?(.+?)(?:-r\d+)?\.(?:md|json)$" % "|".join(PROVIDERS))
 # Current wrappers reserve exits 70 and 74 for failures after invocation began.
 # Preflight failures use other exit codes. Kimi also records the boundary
@@ -52,6 +52,8 @@ def parse(name):
 def hard(provider, requested, selected, effort=""):
     if provider == "kimi":
         return requested == "hard" or selected.startswith("kimi-code/k3") or effort == "high"
+    if provider == "copilot":
+        return requested == "hard"
     return provider in ("claude", "codex") and (requested in ("opus", "hard") or "opus" in selected)
 
 
@@ -100,7 +102,7 @@ def day(path, parsed):
 
 def main(argv):
     if len(argv) != 4 or argv[1] not in PROVIDERS or argv[2] not in ("hard", "routine"):
-        print("usage: review-budget.py <claude|codex|gemini|kimi> <hard|routine> <output-path>", file=sys.stderr)
+        print("usage: review-budget.py <claude|codex|copilot|gemini|kimi> <hard|routine> <output-path>", file=sys.stderr)
         return 64
     provider, tier, output = argv[1], argv[2], Path(argv[3])
     policy = json.loads((Path(__file__).resolve().parent / "review-budget.json").read_text())
@@ -122,7 +124,7 @@ def main(argv):
     elif n >= cap and provider != esc:
         problems.append(f"topic '{topic}' has had {n} review rounds (cap {cap}); escalate to {esc}-review.sh, then to the user")
     hard_n = sum(1 for r in prior if r[4])
-    if tier == "hard" and provider in ("claude", "codex", "kimi") and hard_n >= policy["max_hard_rounds_per_topic"]:
+    if tier == "hard" and provider in ("claude", "codex", "copilot", "kimi") and hard_n >= policy["max_hard_rounds_per_topic"]:
         problems.append(f"topic '{topic}' already used {hard_n} hard-tier round(s) (cap {policy['max_hard_rounds_per_topic']}); use the routine tier")
     if len(today) >= policy["max_reviews_per_provider_per_day"]:
         problems.append(f"{len(today)} {provider} reviews already ran in this repository today (cap {policy['max_reviews_per_provider_per_day']})")
