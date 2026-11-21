@@ -2,10 +2,10 @@
 
 Workstream: 2026-11-21-copilot-phase2b
 Owner: Claude (2026-11-21, assigned by the user in this session)
-Status: active
-Branch: copilot-phase2b
+Status: done (2026-11-21)
+Branch: copilot-phase2b (merged to main)
 Operational: no
-Links: [Phase 2a](2026-11-21-copilot-reviewer.md), [proposal](../proposals/2026-11-20-copilot-owner.md), [README tickets](../README.md), [protocol](../PROTOCOL.md)
+Links: [Phase 2a](../2026-11-21-copilot-reviewer.md), [proposal](../../proposals/2026-11-20-copilot-owner.md), [README tickets](../../README.md), [protocol](../../PROTOCOL.md)
 
 ## Brief
 
@@ -45,6 +45,8 @@ No production service changes; the live gateway is untouched until merge.
   Supersedes: none.
 - 2026-11-21, user, scope: this change. Quote: "Yes, commit and merge".
   Supersedes: none.
+- 2026-11-21, user, scope: formal closure of R02-F1. Quote: "R02-F1
+  accepted". Supersedes: none.
 
 ## Reviews
 
@@ -63,12 +65,12 @@ counts as a spent round and as the topic's hard round.
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R02-F1 | major | user-decided 2026-11-21 "i reverse myself and accept the risk" | resolved: pools stay as user Decisions lines; risk documented in README |
-| R02-F2 | major | verified r03 | resolved |
-| R02-F3 | minor | verified r03 | resolved |
-| R03-F1 | major | not a defect: the reviewer labeled its confirmation that R02-F1 is resolved | resolved |
-| R03-F2 | major | not a defect: the reviewer labeled its confirmation that R02-F2 is resolved | resolved |
-| R03-F3 | minor | not a defect: the reviewer labeled its confirmation that R02-F3 is resolved | resolved |
+| R02-F1 | major | user-decided 2026-11-21 "R02-F1 accepted" | closed |
+| R02-F2 | major | fixed 69e8303 | closed |
+| R02-F3 | minor | fixed 69e8303 | closed |
+| R03-F1 | major | rejected: not a defect; the reviewer labeled its confirmation that R02-F1 is resolved | closed |
+| R03-F2 | major | rejected: not a defect; the reviewer labeled its confirmation that R02-F2 is resolved | closed |
+| R03-F3 | minor | rejected: not a defect; the reviewer labeled its confirmation that R02-F3 is resolved | closed |
 
 ## Log
 
@@ -83,3 +85,10 @@ counts as a spent round and as the topic's hard round.
   (`review-pools.json`) was reverted uncommitted. 149 unit tests pass.
 - 2026-11-21: Copilot r03 ACCEPT: R02-F2 and R02-F3 verified, R02-F1
   resolved by sponsor decision. Review complete.
+- r02: raw review compared with its rows; no unlabeled actionable item
+- r03: raw review compared with its rows; no unlabeled actionable item
+- 2026-11-21: user approved commit and merge ("Yes, commit and merge");
+  merged to main as `69e8303`. R02-F2 and R02-F3 cite the fix commit: r03
+  confirmed both but mid-line ("F2 [major]: R02-F2 is resolved: ..."), which
+  docs-check does not accept as a verification line. R02-F1 closed by the
+  sponsor ("R02-F1 accepted"; risk documented in README). Closed.
