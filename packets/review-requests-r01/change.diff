@@ -1,0 +1,550 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index ac65b6e..c5c16f1 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -78,20 +78,17 @@ reviewers/gemini-review.sh --owner <agent> [--author A]... [--author-model M]...
+ ```
+ 
+ Add `--packet-root <dir>` to use a shared prompt or packet from outside the
+-repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
++repository. Options go
+ before the model or tier. For automatic selection of mixed-authorship work,
+ repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
+ 
+ For automatic selection, the `auto-` output name is a template; the artifact
+-uses the chosen provider's prefix. New topics go to the active, non-owner
+-and non-author reviewer with the fewest spent review rounds in that repository
+-today and room
+-under that provider's daily cap, with roster order breaking ties. Follow-ups
++uses the chosen provider's prefix. New topics go to the eligible active reviewer
++with the fewest rounds in that repository today and room under its daily cap,
++roster order breaking ties. Follow-ups
+ stay with the topic's latest eligible reviewer when round records establish one
+ unambiguous reviewer; otherwise selection falls back to daily balancing. An
+-existing artifact or diagnostic is never retried under the same name. This
+-local-history rule balances known gateway usage without pretending to measure
+-incomparable provider quotas. The dispatcher fails over only after preflight
++existing artifact or diagnostic is never retried under the same name. The dispatcher fails over only after preflight
+ exit 69 or 78, never after a model call, timeout, validation failure, or budget
+ refusal; if all candidates fail preflight, use Gemini. The template date must
+ be today's local date.
+@@ -141,9 +138,8 @@ Before requesting another round, the owner checks each finding against the
+ evidence. A finding that a script or test disproves is dispositioned
+ `rejected:` with that evidence; it does not justify another round. A
+ `Mechanical check` line gives a quoted value's measured length, not a
+-verdict: the owner reads the finding to see which number it claims for the
+-value. A note that a finding cites a `file://` path means the link verifies
+-nothing; the owner checks any quoted code against the packet before acting.
++verdict. A finding citing a `file://` path verifies nothing; check any quoted
++code against the packet before acting.
+ 
+ ## Packets and isolation
+ 
+@@ -156,15 +152,19 @@ nothing; the owner checks any quoted code against the packet before acting.
+   or commit range, relevant evidence and invariants, the competing claims,
+   the exact decision, prohibited actions, and named questions. Do not ask for
+   repository-wide rediscovery.
+-- Reviewers cannot count characters. Write every hash or long identifier in
+-  8-character groups next to a script-produced length (e.g.
+-  `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
+-  check the reviewer cannot run.
+-- Keep hard-tier Gemini packets small: send the delta and the targeted
+-  context, not full source. Above about 150 KB the hard model runs out of
+-  output tokens before it writes the review, and the wrapper refuses it.
++- Reviewers cannot count characters: write hashes and long identifiers in
++  8-character groups with a script-produced length (`len=64 groups=ca71fc6a
++  ...`), and give script output for checks they cannot run.
++- Keep hard-tier Gemini packets to the delta and targeted context; above
++  about 150 KB the model runs out of output and the wrapper refuses them.
+ - Never include `.env` files, credentials, keys, production data, private or
+   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
++- **Where packets may go.** Within these rules, a packet may be sent to any
++  reviewer vendor registered in `agents.json` (Anthropic, OpenAI, Moonshot,
++  Google) by CLI or API without per-task approval (user decision 2026-11-20).
++- **Review requests.** An owner that cannot send a packet records it with
++  `review-request.py create`; the user, or an agent they ask, runs it with
++  `review-request.py run` through the normal wrapper (README).
+ 
+ ## Artifacts and records
+ 
+diff --git a/README.md b/README.md
+index da7d52d..0522686 100644
+--- a/README.md
++++ b/README.md
+@@ -5,10 +5,14 @@ prediction-market repositories and other projects. Consumer repositories keep
+ small tracked entrypoints that delegate here. Roles, escalation, and review
+ records are defined in [PROTOCOL.md](PROTOCOL.md).
+ 
+-Kimi runs through the Kimi Code CLI's managed OAuth provider. The wrapper
+-refuses API credentials and model/endpoint overrides, verifies that the selected
+-alias is configured for managed OAuth with no API key, and does not use Ollama
+-or direct Moonshot API configuration.
++Codex and Kimi each have two routes, chosen by `route` in their model policy:
++`subscription` runs the provider's CLI (Kimi through the Kimi Code CLI's
++managed OAuth provider, refusing API credentials and model/endpoint
++overrides), and `api` sends the packet directly to the provider's API with a
++Keychain key under a spend cap (see "API route for Codex and Kimi" below).
++Both routes are current: as of 2026-11-20 both providers use `api`. Sending a
++review packet to any registered reviewer vendor, by either route, is approved
++(see "Where packets may go" in [PROTOCOL.md](PROTOCOL.md)).
+ 
+ Invocation contract:
+ 
+@@ -257,6 +261,31 @@ in argv, the environment or shell history. (`security add-generic-password
+ -w` truncates typed input at 128 characters, and passing the key as its
+ argument exposes it in the process list.)
+ 
++## Review requests
++
++An owner that cannot send a packet itself (for example a Copilot sub-agent,
++which refuses to transmit source to a third-party API) records a request
++instead, and someone else runs it:
++
++```text
++review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini|auto --tier T
++    --owner O [--author A]... [--author-model M]... [--task ID] [--override-reason TEXT]
++    PROMPT .collab/<provider>-YYYY-MM-DD-<topic>[-rNN].md PACKET...
++review-request.py list [REPO]
++review-request.py run [--apply-override] reviewers/requests/<output name>.request.json
++```
++
++`create` applies the identity and vendor rule, refuses an output or
++diagnostic that already exists, hashes the prompt and every packet file, and
++writes `reviewers/requests/<output name>.request.json`; it sends nothing.
++`run` refuses a request whose files changed or whose output exists, then calls
++the normal wrapper from the repository root with the recorded arguments, so
++every gateway check applies. It ignores any `REVIEW_BUDGET_OVERRIDE` in the
++runner's environment; a request's `--override-reason` is applied only with
++`--apply-override`, which the runner passes only after the user approved that
++round. The outcome goes to `<output name>.result.json` beside the request.
++Commit the request and result with the review they produced.
++
+ ## Gemini reviews through Antigravity CLI
+ 
+ The Gemini wrapper runs reviews through the Antigravity CLI (`agy`) on the
+diff --git a/review-request.py b/review-request.py
+new file mode 100755
+index 0000000..ae3f03a
+--- /dev/null
++++ b/review-request.py
+@@ -0,0 +1,255 @@
++#!/usr/bin/env python3
++"""Review requests: let an owner ask for a review it cannot send itself.
++
++  review-request.py create [--packet-root DIR] --reviewer R --tier T --owner O
++                           [--author A]... [--author-model M]... [--task ID]
++                           [--override-reason TEXT] PROMPT OUTPUT PACKET...
++  review-request.py run [--apply-override] REQUEST
++  review-request.py list [REPO]
++
++`create` checks the identity and vendor rule, hashes the prompt and every
++packet file, and writes `reviewers/requests/<output name>.request.json` in the
++repository that owns OUTPUT (`<repo>/.collab/...`). Nothing is sent.
++
++`run` (the user, or an agent the user asks) re-checks the request: every file
++must still have its recorded hash and the output must not exist. It then calls
++the normal wrapper `<reviewer>-review.sh` with the recorded arguments from the
++repository root, so every gateway check (budget, packet safety, output
++contract, checksums) applies as if the owner had called it. A request that
++carries a budget override is refused unless the runner passes
++`--apply-override`, which it does only after the user has approved that round.
++The outcome is written beside the request as `.result.json`.
++
++`list` prints the requests in REPO (default: the current directory) whose
++output and diagnostic do not exist yet.
++
++Exit codes: 64 usage, identity or changed request; 66 missing file;
++73 request already exists; otherwise the wrapper's own exit code.
++"""
++
++import hashlib
++import importlib.util
++import json
++import os
++import subprocess
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++GATEWAY = Path(__file__).resolve().parent
++_spec = importlib.util.spec_from_file_location("agents", GATEWAY / "agents.py")
++agents = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(agents)
++
++REVIEWERS = ("claude", "codex", "kimi", "gemini", "auto")
++
++
++class Fail(Exception):
++    def __init__(self, code, msg):
++        super().__init__(msg)
++        self.code = code
++
++
++def sha256(path):
++    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
++
++
++def regular(path, label):
++    p = Path(path)
++    if p.is_symlink() or not p.is_file():
++        raise Fail(66, f"{label} is not a regular file: {path}")
++    return p.resolve()
++
++
++def repo_of(output):
++    out = Path(output).expanduser()
++    parent = out.parent.resolve()
++    if parent.name != ".collab":
++        raise Fail(64, "OUTPUT must be inside the repository's .collab/ directory")
++    return parent.parent, parent / out.name
++
++
++def request_path(repo, output_name):
++    return repo / "reviewers" / "requests" / (output_name + ".request.json")
++
++
++def create(args):
++    opts = {"--packet-root": None, "--reviewer": None, "--tier": None, "--owner": None, "--task": None,
++            "--override-reason": None}
++    authors, models = [], []
++    while args and args[0].startswith("--"):
++        if len(args) < 2 or not args[1].strip():
++            raise Fail(64, f"{args[0]} needs a value")
++        flag, value, args = args[0], args[1], args[2:]
++        if flag == "--author":
++            authors.append(value)
++        elif flag == "--author-model":
++            models.append(value)
++        elif flag in opts and opts[flag] is None:
++            opts[flag] = value
++        else:
++            raise Fail(64, f"unknown or repeated option {flag}")
++    if len(args) < 3:
++        raise Fail(64, __doc__.strip().splitlines()[2].strip())
++    reviewer, tier, owner = opts["--reviewer"], opts["--tier"], opts["--owner"]
++    if reviewer not in REVIEWERS or not tier or not owner:
++        raise Fail(64, f"--reviewer (one of {', '.join(REVIEWERS)}), --tier and --owner are required")
++    registry = agents.load()
++    try:
++        if reviewer == "auto":
++            agents.excluded_vendors(registry, owner, authors, models)  # validates owner, authors, models
++            if not [r for r in ("claude", "codex", "kimi") if _eligible(registry, r, owner, authors, models)]:
++                raise agents.IdentityError("no reviewer channel is eligible under the vendor rule")
++        else:
++            agents.check(registry, reviewer, owner, authors, models)
++    except agents.IdentityError as exc:
++        raise Fail(64, f"identity: {exc}")
++    prompt, output, packets = args[0], args[1], args[2:]
++    repo, out = repo_of(output)
++    for p in (out, out.with_name(out.name + ".diagnostic.json")):
++        if p.exists():
++            raise Fail(73, f"{p.name} already exists; use a new rNN name")
++    files = [regular(prompt, "prompt")] + [regular(p, "packet") for p in packets]
++    root = Path(opts["--packet-root"]).expanduser().resolve() if opts["--packet-root"] else None
++    for f in files:
++        if not (f.is_relative_to(repo) or (root and f.is_relative_to(root))):
++            raise Fail(64, f"{f} is outside the repository; pass --packet-root")
++    req = request_path(repo, out.name)
++    if req.exists():
++        raise Fail(73, f"request already exists: {req}")
++
++    def rel(f):
++        return str(f.relative_to(repo)) if f.is_relative_to(repo) else str(f)
++
++    body = {"version": 1, "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
++            "reviewer": reviewer, "tier": tier, "owner": owner, "authors": authors, "author_models": models,
++            "task": opts["--task"], "packet_root": str(root) if root else None,
++            "override_reason": opts["--override-reason"], "output": str(out.relative_to(repo)),
++            "prompt": {"path": rel(files[0]), "sha256": sha256(files[0])},
++            "packets": [{"path": rel(f), "sha256": sha256(f)} for f in files[1:]]}
++    req.parent.mkdir(parents=True, exist_ok=True)
++    with open(req, "x") as fh:
++        json.dump(body, fh, indent=2)
++        fh.write("\n")
++    print(f"request written: {req.relative_to(repo)} (nothing was sent)")
++    return 0
++
++
++def _eligible(registry, reviewer, owner, authors, models):
++    try:
++        agents.check(registry, reviewer, owner, authors, models)
++        return True
++    except agents.IdentityError:
++        return False
++
++
++def load_request(path):
++    req = Path(path).resolve()
++    repo = req.parent.parent.parent
++    if req.parent != repo / "reviewers" / "requests" or not req.name.endswith(".request.json"):
++        raise Fail(64, "REQUEST must be reviewers/requests/<name>.request.json inside a repository")
++    try:
++        body = json.loads(req.read_text())
++    except (OSError, ValueError) as exc:
++        raise Fail(64, f"cannot read the request: {exc}")
++    if body.get("version") != 1 or body.get("reviewer") not in REVIEWERS:
++        raise Fail(64, "unsupported request")
++    if Path(body["output"]).name + ".request.json" != req.name:
++        raise Fail(64, "request name does not match its output")
++    return req, repo, body
++
++
++def command(repo, body):
++    def resolve(entry):
++        p = Path(entry["path"])
++        p = p if p.is_absolute() else repo / p
++        f = regular(p, "request file")
++        if sha256(f) != entry["sha256"]:
++            raise Fail(64, f"{entry['path']} changed since the request was written; write a new request")
++        return str(f)
++
++    files = [resolve(body["prompt"])] + [resolve(e) for e in body["packets"]]
++    cmd = [str(GATEWAY / f"{body['reviewer']}-review.sh")]
++    if body.get("packet_root"):
++        cmd += ["--packet-root", body["packet_root"]]
++    cmd += ["--owner", body["owner"]]
++    for a in body.get("authors") or []:
++        cmd += ["--author", a]
++    for m in body.get("author_models") or []:
++        cmd += ["--author-model", m]
++    if body.get("task"):
++        cmd += ["--task", body["task"]]
++    return cmd + [body["tier"], files[0], body["output"]] + files[1:]
++
++
++def run(args):
++    apply_override = False
++    if args and args[0] == "--apply-override":
++        apply_override, args = True, args[1:]
++    if len(args) != 1:
++        raise Fail(64, "usage: review-request.py run [--apply-override] REQUEST")
++    req, repo, body = load_request(args[0])
++    out = repo / body["output"]
++    for p in (out, out.with_name(out.name + ".diagnostic.json")):
++        if p.exists():
++            raise Fail(73, f"{p.name} already exists; this request has already run")
++    cmd = command(repo, body)
++    env = {k: v for k, v in os.environ.items() if k != "REVIEW_BUDGET_OVERRIDE"}
++    if body.get("override_reason"):
++        if not apply_override:
++            raise Fail(64, "this request carries a budget override; rerun with --apply-override only after "
++                           "the user has approved that round")
++        env["REVIEW_BUDGET_OVERRIDE"] = body["override_reason"]
++    started = datetime.now(timezone.utc).isoformat(timespec="seconds")
++    code = subprocess.run(cmd, cwd=repo, env=env).returncode
++    result = {"request": req.name, "started": started,
++              "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"), "exit_code": code,
++              "artifact": body["output"] if out.exists() else None,
++              "diagnostic": str(Path(body["output"]).with_name(out.name + ".diagnostic.json"))
++              if out.with_name(out.name + ".diagnostic.json").exists() else None}
++    with open(req.with_name(req.name[:-len(".request.json")] + ".result.json"), "x") as fh:
++        json.dump(result, fh, indent=2)
++        fh.write("\n")
++    return code
++
++
++def list_requests(args):
++    repo = Path(args[0] if args else ".").resolve()
++    found = 0
++    for req in sorted((repo / "reviewers" / "requests").glob("*.request.json")):
++        try:
++            _, _, body = load_request(req)
++        except Fail as exc:
++            print(f"{req.name}: unreadable ({exc})")
++            continue
++        out = repo / body["output"]
++        if out.exists() or out.with_name(out.name + ".diagnostic.json").exists():
++            continue
++        found += 1
++        extra = "; budget override requested" if body.get("override_reason") else ""
++        print(f"{req.relative_to(repo)}: {body['reviewer']} {body['tier']} for {body['owner']}"
++              f" -> {body['output']}{extra}")
++    if not found:
++        print("no pending review requests")
++    return 0
++
++
++def main(argv):
++    try:
++        if len(argv) >= 2 and argv[1] == "create":
++            return create(argv[2:])
++        if len(argv) >= 2 and argv[1] == "run":
++            return run(argv[2:])
++        if len(argv) >= 2 and argv[1] == "list":
++            return list_requests(argv[2:])
++        raise Fail(64, __doc__.strip().splitlines()[2].strip())
++    except Fail as exc:
++        print(f"review-request: {exc}", file=sys.stderr)
++        return exc.code
++    except (OSError, ValueError, KeyError) as exc:
++        print(f"review-request: {type(exc).__name__}: {exc}", file=sys.stderr)
++        return 78
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv))
+diff --git a/tests/test_review_request.py b/tests/test_review_request.py
+new file mode 100644
+index 0000000..4d88d28
+--- /dev/null
++++ b/tests/test_review_request.py
+@@ -0,0 +1,159 @@
++#!/usr/bin/env python3
++import importlib.util
++import io
++import json
++import os
++import tempfile
++import unittest
++from pathlib import Path
++from unittest import mock
++
++ROOT = Path(__file__).resolve().parent.parent
++_spec = importlib.util.spec_from_file_location("review_request", ROOT / "review-request.py")
++rr = importlib.util.module_from_spec(_spec)
++_spec.loader.exec_module(rr)
++
++FAKE_WRAPPER = """#!/bin/zsh
++print -r -- "$*" > "$RR_TEST_LOG"
++print -r -- "override=${REVIEW_BUDGET_OVERRIDE:-none} cwd=$PWD" >> "$RR_TEST_LOG"
++for a in "$@"; do case "$a" in .collab/*) out="$a";; esac; done
++print "review" > "$out"
++exit ${RR_TEST_EXIT:-0}
++"""
++
++
++class ReviewRequestTest(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        base = Path(self.tmp.name).resolve()
++        self.repo = base / "repo"
++        (self.repo / ".collab").mkdir(parents=True)
++        (self.repo / "p").mkdir()
++        (self.repo / "p" / "prompt.md").write_text("Review this.\n")
++        (self.repo / "p" / "code.txt").write_text("def f(): pass\n")
++        self.gw = base / "gateway"
++        self.gw.mkdir()
++        for name in ("kimi", "claude", "codex", "gemini", "auto"):
++            w = self.gw / f"{name}-review.sh"
++            w.write_text(FAKE_WRAPPER)
++            w.chmod(0o755)
++        self.log = base / "log.txt"
++        self.env = mock.patch.dict(os.environ, {"RR_TEST_LOG": str(self.log)})
++        self.env.start()
++        self.gwpatch = mock.patch.object(rr, "GATEWAY", self.gw)
++        self.gwpatch.start()
++        self.cwd = os.getcwd()
++        os.chdir(self.repo)
++
++    def tearDown(self):
++        os.chdir(self.cwd)
++        self.gwpatch.stop()
++        self.env.stop()
++        self.tmp.cleanup()
++
++    def main(self, *argv):
++        err = io.StringIO()
++        with mock.patch("sys.stderr", err), mock.patch("sys.stdout", io.StringIO()) as out:
++            code = rr.main(["review-request.py", *argv])
++        self.err, self.out = err.getvalue(), out.getvalue()
++        return code
++
++    def create(self, *extra, reviewer="kimi", output=".collab/kimi-2026-11-20-t5-r08.md"):
++        return self.main("create", "--reviewer", reviewer, "--tier", "routine", "--owner", "copilot",
++                         "--author-model", "gpt-6.1-terra", "--task", "T5", *extra,
++                         "p/prompt.md", output, "p/code.txt")
++
++    def req(self, name="kimi-2026-11-20-t5-r08.md"):
++        return self.repo / "reviewers" / "requests" / (name + ".request.json")
++
++    def test_create_records_hashes_and_sends_nothing(self):
++        self.assertEqual(self.create(), 0, self.err)
++        body = json.loads(self.req().read_text())
++        self.assertEqual((body["reviewer"], body["owner"], body["author_models"], body["task"]),
++                         ("kimi", "copilot", ["gpt-6.1-terra"], "T5"))
++        self.assertEqual(body["packets"][0]["path"], "p/code.txt")
++        self.assertEqual(len(body["prompt"]["sha256"]), 64)
++        self.assertFalse(self.log.exists())
++
++    def test_vendor_rule_applies_at_create(self):
++        self.assertEqual(self.create(reviewer="codex", output=".collab/codex-2026-11-20-t5-r08.md"), 64)
++        self.assertIn("same vendor", self.err)
++        self.assertFalse(self.req("codex-2026-11-20-t5-r08.md").exists())
++        code = self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "copilot",
++                         "p/prompt.md", ".collab/kimi-2026-11-20-t5-r08.md", "p/code.txt")
++        self.assertEqual(code, 64)
++        self.assertIn("--author-model", self.err)
++
++    def test_output_location_files_and_duplicates(self):
++        self.assertEqual(self.create(output="kimi-2026-11-20-t5-r08.md"), 64)
++        self.assertEqual(self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "claude",
++                                   "p/missing.md", ".collab/kimi-x.md", "p/code.txt"), 66)
++        os.symlink(self.repo / "p" / "code.txt", self.repo / "p" / "link.txt")
++        self.assertEqual(self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "claude",
++                                   "p/prompt.md", ".collab/kimi-x.md", "p/link.txt"), 66)
++        outside = Path(self.tmp.name) / "outside.txt"
++        outside.write_text("x")
++        self.assertEqual(self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "claude",
++                                   "p/prompt.md", ".collab/kimi-x.md", str(outside)), 64)
++        self.assertEqual(self.create(), 0)
++        self.assertEqual(self.create(), 73)
++        (self.repo / ".collab" / "kimi-2026-11-20-t5-r09.md.diagnostic.json").write_text("{}")
++        self.assertEqual(self.create(output=".collab/kimi-2026-11-20-t5-r09.md"), 73)
++
++    def test_run_calls_the_wrapper_with_the_recorded_arguments(self):
++        self.create()
++        self.assertEqual(self.main("run", str(self.req())), 0, self.err)
++        argv, envline = self.log.read_text().splitlines()
++        self.assertEqual(argv, "--owner copilot --author-model gpt-6.1-terra --task T5 routine "
++                               f"{self.repo}/p/prompt.md .collab/kimi-2026-11-20-t5-r08.md {self.repo}/p/code.txt")
++        self.assertEqual(envline, f"override=none cwd={self.repo}")
++        result = json.loads(self.req().with_name("kimi-2026-11-20-t5-r08.md.result.json").read_text())
++        self.assertEqual((result["exit_code"], result["artifact"]), (0, ".collab/kimi-2026-11-20-t5-r08.md"))
++        self.assertEqual(self.main("run", str(self.req())), 73)
++
++    def test_run_refuses_changed_files(self):
++        self.create()
++        (self.repo / "p" / "code.txt").write_text("changed\n")
++        self.assertEqual(self.main("run", str(self.req())), 64)
++        self.assertIn("changed since", self.err)
++        self.assertFalse(self.log.exists())
++
++    def test_override_needs_the_runner_flag_and_ambient_override_is_dropped(self):
++        self.create("--override-reason", "user approved r08")
++        self.assertEqual(self.main("run", str(self.req())), 64)
++        self.assertFalse(self.log.exists())
++        self.assertEqual(self.main("run", "--apply-override", str(self.req())), 0, self.err)
++        self.assertIn("override=user approved r08", self.log.read_text())
++        self.create(output=".collab/kimi-2026-11-20-t5-r10.md")
++        with mock.patch.dict(os.environ, {"REVIEW_BUDGET_OVERRIDE": "ambient"}):
++            self.assertEqual(self.main("run", str(self.req("kimi-2026-11-20-t5-r10.md"))), 0)
++        self.assertIn("override=none", self.log.read_text())
++
++    def test_wrapper_exit_code_is_returned_and_recorded(self):
++        self.create()
++        with mock.patch.dict(os.environ, {"RR_TEST_EXIT": "79"}):
++            self.assertEqual(self.main("run", str(self.req())), 79)
++        result = json.loads(self.req().with_name("kimi-2026-11-20-t5-r08.md.result.json").read_text())
++        self.assertEqual(result["exit_code"], 79)
++
++    def test_list_shows_only_pending_requests(self):
++        self.create()
++        self.create("--override-reason", "x", output=".collab/kimi-2026-11-20-t5-r09.md")
++        self.assertEqual(self.main("list", str(self.repo)), 0)
++        self.assertIn("t5-r08.md", self.out)
++        self.assertIn("budget override requested", self.out)
++        self.main("run", str(self.req()))
++        self.main("list", str(self.repo))
++        self.assertNotIn("t5-r08.md:", self.out)
++
++    def test_tampered_request_is_refused(self):
++        self.create()
++        body = json.loads(self.req().read_text())
++        body["output"] = ".collab/kimi-2026-11-20-other.md"
++        self.req().write_text(json.dumps(body))
++        self.assertEqual(self.main("run", str(self.req())), 64)
++        self.assertIn("does not match", self.err)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -13,7 +13,7 @@
     "prices_checked": "2026-11-20, third-party trackers; sponsor to confirm",
     "tiers": {
       "hard": {"model": "kimi-k3.1-pro", "max_output_tokens": 32000, "usd_per_1m_input": 2.0, "usd_per_1m_output": 10.0},
-      "routine": {"model": "kimi-k2.6", "max_output_tokens": 16000, "usd_per_1m_input": 0.95, "usd_per_1m_output": 4.0}
+      "routine": {"model": "kimi-k2.6", "max_output_tokens": 32000, "usd_per_1m_input": 0.95, "usd_per_1m_output": 4.0}
     }
   }
 }

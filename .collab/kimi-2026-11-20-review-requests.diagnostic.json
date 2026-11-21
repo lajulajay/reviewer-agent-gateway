@@ -1,0 +1,14 @@
+{
+  "provider": "kimi",
+  "cli": "kimi",
+  "owner": "claude",
+  "requested_model": "routine",
+  "selected_model": "",
+  "reasoning_effort": "",
+  "reason": "gateway wrapper files have uncommitted changes",
+  "exit_code": 78,
+  "model_invocation_began": false,
+  "elapsed_seconds": 0,
+  "stdout": "",
+  "stderr": ""
+}

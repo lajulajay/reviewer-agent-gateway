@@ -1,0 +1,14 @@
+{
+  "provider": "kimi",
+  "cli": "kimi",
+  "owner": "claude",
+  "requested_model": "routine",
+  "selected_model": "kimi-k2.6",
+  "reasoning_effort": "not set",
+  "reason": "Kimi API call failed: API reply rejected: finish_reason 'length'",
+  "exit_code": 70,
+  "model_invocation_began": true,
+  "elapsed_seconds": 462,
+  "stdout": "",
+  "stderr": "API reply rejected: finish_reason 'length'\n"
+}

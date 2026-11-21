@@ -5,10 +5,15 @@ prediction-market repositories and other projects. Consumer repositories keep
 small tracked entrypoints that delegate here. Roles, escalation, and review
 records are defined in [PROTOCOL.md](PROTOCOL.md).
 
-Kimi runs through the Kimi Code CLI's managed OAuth provider. The wrapper
-refuses API credentials and model/endpoint overrides, verifies that the selected
-alias is configured for managed OAuth with no API key, and does not use Ollama
-or direct Moonshot API configuration.
+Codex and Kimi each have two routes, chosen by `route` in their model policy:
+`subscription` runs the provider's CLI (Kimi through the Kimi Code CLI's
+managed OAuth provider, refusing API credentials and model/endpoint
+overrides), and `api` sends the packet directly to the provider's API with a
+Keychain key under a spend cap (see "API route for Codex and Kimi" below).
+As of 2026-11-20 both providers use `api`. Sending a packet through these
+wrappers to a registered reviewer vendor needs no per-task approval of the
+destination; budget, packet-safety and override rules are unchanged (see
+"Where packets may go" in [PROTOCOL.md](PROTOCOL.md)).
 
 Invocation contract:
 
@@ -256,6 +261,37 @@ echo off and writes through the Security framework, so the key never appears
 in argv, the environment or shell history. (`security add-generic-password
 -w` truncates typed input at 128 characters, and passing the key as its
 argument exposes it in the process list.)
+
+## Review requests
+
+An owner that cannot send a packet itself (for example a Copilot sub-agent,
+which refuses to transmit source to a third-party API) records a request
+instead; the user, or an agent the user asks, runs it:
+
+```text
+review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini --tier T
+    --owner O [--author A]... [--author-model M]... [--task ID] [--override-reason TEXT]
+    PROMPT .collab/<provider>-YYYY-MM-DD-<topic>[-rNN].md PACKET...
+review-request.py list [REPO]
+review-request.py run [--apply-override] reviewers/requests/<output name>.request.json
+```
+
+`create` applies the identity and vendor rule, refuses an output or
+diagnostic that already exists, hashes the prompt and every packet file, and
+writes `reviewers/requests/<output name>.request.json`; it sends nothing.
+`run` refuses a request whose files changed or whose output exists, then calls
+the normal wrapper from the repository root with the recorded arguments, so
+every gateway check applies. It ignores any `REVIEW_BUDGET_OVERRIDE` in the
+runner's environment; a request's `--override-reason` is applied only with
+`--apply-override`, which the runner passes only after the user approved that
+round. A request runs at most once: `run` claims `<output name>.result.json`
+before calling the wrapper (nothing is sent if it cannot) and records the
+outcome there; another attempt needs a new request with a new `rNN` name.
+The output must be exactly `.collab/<request name>` and packets must stay in
+the repository or the recorded packet root. The embedded hashes detect files
+changed after `create` but do not authenticate the request, an editable
+record; the wrapper remains the control. Commit the request and result with
+the review they produced.
 
 ## Gemini reviews through Antigravity CLI
 

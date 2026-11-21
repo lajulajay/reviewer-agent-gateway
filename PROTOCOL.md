@@ -78,20 +78,17 @@ reviewers/gemini-review.sh --owner <agent> [--author A]... [--author-model M]...
 ```
 
 Add `--packet-root <dir>` to use a shared prompt or packet from outside the
-repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
+repository. Options go
 before the model or tier. For automatic selection of mixed-authorship work,
 repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
 
 For automatic selection, the `auto-` output name is a template; the artifact
-uses the chosen provider's prefix. New topics go to the active, non-owner
-and non-author reviewer with the fewest spent review rounds in that repository
-today and room
-under that provider's daily cap, with roster order breaking ties. Follow-ups
+uses the chosen provider's prefix. New topics go to the eligible active reviewer
+with the fewest rounds in that repository today and room under its daily cap,
+roster order breaking ties. Follow-ups
 stay with the topic's latest eligible reviewer when round records establish one
 unambiguous reviewer; otherwise selection falls back to daily balancing. An
-existing artifact or diagnostic is never retried under the same name. This
-local-history rule balances known gateway usage without pretending to measure
-incomparable provider quotas. The dispatcher fails over only after preflight
+existing artifact or diagnostic is never retried under the same name. The dispatcher fails over only after preflight
 exit 69 or 78, never after a model call, timeout, validation failure, or budget
 refusal; if all candidates fail preflight, use Gemini. The template date must
 be today's local date.
@@ -141,9 +138,8 @@ Before requesting another round, the owner checks each finding against the
 evidence. A finding that a script or test disproves is dispositioned
 `rejected:` with that evidence; it does not justify another round. A
 `Mechanical check` line gives a quoted value's measured length, not a
-verdict: the owner reads the finding to see which number it claims for the
-value. A note that a finding cites a `file://` path means the link verifies
-nothing; the owner checks any quoted code against the packet before acting.
+verdict. A finding citing a `file://` path verifies nothing; check any quoted
+code against the packet before acting.
 
 ## Packets and isolation
 
@@ -156,15 +152,19 @@ nothing; the owner checks any quoted code against the packet before acting.
   or commit range, relevant evidence and invariants, the competing claims,
   the exact decision, prohibited actions, and named questions. Do not ask for
   repository-wide rediscovery.
-- Reviewers cannot count characters. Write every hash or long identifier in
-  8-character groups next to a script-produced length (e.g.
-  `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
-  check the reviewer cannot run.
-- Keep hard-tier Gemini packets small: send the delta and the targeted
-  context, not full source. Above about 150 KB the hard model runs out of
-  output tokens before it writes the review, and the wrapper refuses it.
+- Reviewers cannot count characters: write hashes and long identifiers in
+  8-character groups with a script-produced length (`len=64 groups=ca71fc6a
+  ...`), and give script output for checks they cannot run.
+- Keep hard-tier Gemini packets to the delta and targeted context; above
+  about 150 KB the model runs out of output and the wrapper refuses them.
 - Never include `.env` files, credentials, keys, production data, private or
   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
+- **Where packets may go.** Sending a packet through a gateway wrapper (CLI
+  or API route) to a reviewer vendor in `agents.json` needs no per-task
+  approval of the destination (user decision 2026-11-20); all else holds.
+- **Review requests.** An owner that cannot send a packet records it with
+  `review-request.py create`; the user, or an agent they ask, runs it with
+  `review-request.py run` through the normal wrapper (README).
 
 ## Artifacts and records
 

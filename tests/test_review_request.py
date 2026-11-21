@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+import importlib.util
+import io
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parent.parent
+_spec = importlib.util.spec_from_file_location("review_request", ROOT / "review-request.py")
+rr = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rr)
+
+FAKE_WRAPPER = """#!/bin/zsh
+print -r -- "$*" > "$RR_TEST_LOG"
+print -r -- "override=${REVIEW_BUDGET_OVERRIDE:-none} cwd=$PWD" >> "$RR_TEST_LOG"
+for a in "$@"; do case "$a" in .collab/*) out="$a";; esac; done
+print "review" > "$out"
+exit ${RR_TEST_EXIT:-0}
+"""
+
+
+class ReviewRequestTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name).resolve()
+        self.repo = base / "repo"
+        (self.repo / ".collab").mkdir(parents=True)
+        (self.repo / "p").mkdir()
+        (self.repo / "p" / "prompt.md").write_text("Review this.\n")
+        (self.repo / "p" / "code.txt").write_text("def f(): pass\n")
+        self.gw = base / "gateway"
+        self.gw.mkdir()
+        for name in ("kimi", "claude", "codex", "gemini", "auto"):
+            w = self.gw / f"{name}-review.sh"
+            w.write_text(FAKE_WRAPPER)
+            w.chmod(0o755)
+        self.log = base / "log.txt"
+        self.env = mock.patch.dict(os.environ, {"RR_TEST_LOG": str(self.log)})
+        self.env.start()
+        self.gwpatch = mock.patch.object(rr, "GATEWAY", self.gw)
+        self.gwpatch.start()
+        self.cwd = os.getcwd()
+        os.chdir(self.repo)
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.gwpatch.stop()
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def main(self, *argv):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), mock.patch("sys.stdout", io.StringIO()) as out:
+            code = rr.main(["review-request.py", *argv])
+        self.err, self.out = err.getvalue(), out.getvalue()
+        return code
+
+    def create(self, *extra, reviewer="kimi", output=".collab/kimi-2026-11-20-t5-r08.md"):
+        return self.main("create", "--reviewer", reviewer, "--tier", "routine", "--owner", "copilot",
+                         "--author-model", "gpt-6.1-terra", "--task", "T5", *extra,
+                         "p/prompt.md", output, "p/code.txt")
+
+    def req(self, name="kimi-2026-11-20-t5-r08.md"):
+        return self.repo / "reviewers" / "requests" / (name + ".request.json")
+
+    def test_create_records_hashes_and_sends_nothing(self):
+        self.assertEqual(self.create(), 0, self.err)
+        body = json.loads(self.req().read_text())
+        self.assertEqual((body["reviewer"], body["owner"], body["author_models"], body["task"]),
+                         ("kimi", "copilot", ["gpt-6.1-terra"], "T5"))
+        self.assertEqual(body["packets"][0]["path"], "p/code.txt")
+        self.assertEqual(len(body["prompt"]["sha256"]), 64)
+        self.assertFalse(self.log.exists())
+
+    def test_vendor_rule_applies_at_create(self):
+        self.assertEqual(self.create(reviewer="codex", output=".collab/codex-2026-11-20-t5-r08.md"), 64)
+        self.assertIn("same vendor", self.err)
+        self.assertFalse(self.req("codex-2026-11-20-t5-r08.md").exists())
+        code = self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "copilot",
+                         "p/prompt.md", ".collab/kimi-2026-11-20-t5-r08.md", "p/code.txt")
+        self.assertEqual(code, 64)
+        self.assertIn("--author-model", self.err)
+
+    def test_output_location_files_and_duplicates(self):
+        self.assertEqual(self.create(output="kimi-2026-11-20-t5-r08.md"), 64)
+        self.assertEqual(self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "claude",
+                                   "p/missing.md", ".collab/kimi-x.md", "p/code.txt"), 66)
+        os.symlink(self.repo / "p" / "code.txt", self.repo / "p" / "link.txt")
+        self.assertEqual(self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "claude",
+                                   "p/prompt.md", ".collab/kimi-x.md", "p/link.txt"), 66)
+        outside = Path(self.tmp.name) / "outside.txt"
+        outside.write_text("x")
+        self.assertEqual(self.main("create", "--reviewer", "kimi", "--tier", "routine", "--owner", "claude",
+                                   "p/prompt.md", ".collab/kimi-x.md", str(outside)), 64)
+        self.assertEqual(self.create(), 0)
+        self.assertEqual(self.create(), 73)
+        (self.repo / ".collab" / "kimi-2026-11-20-t5-r09.diagnostic.json").write_text("{}")
+        self.assertEqual(self.create(output=".collab/kimi-2026-11-20-t5-r09.md"), 73)
+
+    def test_run_calls_the_wrapper_with_the_recorded_arguments(self):
+        self.create()
+        self.assertEqual(self.main("run", str(self.req())), 0, self.err)
+        argv, envline = self.log.read_text().splitlines()
+        self.assertEqual(argv, "--owner copilot --author-model gpt-6.1-terra --task T5 routine "
+                               f"{self.repo}/p/prompt.md .collab/kimi-2026-11-20-t5-r08.md {self.repo}/p/code.txt")
+        self.assertEqual(envline, f"override=none cwd={self.repo}")
+        result = json.loads(self.req().with_name("kimi-2026-11-20-t5-r08.md.result.json").read_text())
+        self.assertEqual((result["exit_code"], result["artifact"]), (0, ".collab/kimi-2026-11-20-t5-r08.md"))
+        self.assertEqual(self.main("run", str(self.req())), 73)
+
+    def test_run_refuses_changed_files(self):
+        self.create()
+        (self.repo / "p" / "code.txt").write_text("changed\n")
+        self.assertEqual(self.main("run", str(self.req())), 64)
+        self.assertIn("changed since", self.err)
+        self.assertFalse(self.log.exists())
+
+    def test_override_needs_the_runner_flag_and_ambient_override_is_dropped(self):
+        self.create("--override-reason", "user approved r08")
+        self.assertEqual(self.main("run", str(self.req())), 64)
+        self.assertFalse(self.log.exists())
+        self.assertEqual(self.main("run", "--apply-override", str(self.req())), 0, self.err)
+        self.assertIn("override=user approved r08", self.log.read_text())
+        self.create(output=".collab/kimi-2026-11-20-t5-r10.md")
+        with mock.patch.dict(os.environ, {"REVIEW_BUDGET_OVERRIDE": "ambient"}):
+            self.assertEqual(self.main("run", str(self.req("kimi-2026-11-20-t5-r10.md"))), 0)
+        self.assertIn("override=none", self.log.read_text())
+
+    def test_wrapper_exit_code_and_diagnostic_are_recorded(self):
+        fail = self.gw / "kimi-review.sh"
+        fail.write_text("#!/bin/zsh\nprint '{}' > .collab/kimi-2026-11-20-t5-r08.diagnostic.json\nexit 79\n")
+        self.create()
+        self.assertEqual(self.main("run", str(self.req())), 79)
+        result = json.loads(self.req().with_name("kimi-2026-11-20-t5-r08.md.result.json").read_text())
+        self.assertEqual((result["exit_code"], result["artifact"], result["diagnostic"]),
+                         (79, None, ".collab/kimi-2026-11-20-t5-r08.diagnostic.json"))
+        self.assertEqual(self.main("run", str(self.req())), 73)
+        self.main("list", str(self.repo))
+        self.assertNotIn("t5-r08.md", self.out)
+
+    def test_list_shows_only_pending_requests(self):
+        self.create()
+        self.create("--override-reason", "x", output=".collab/kimi-2026-11-20-t5-r09.md")
+        self.assertEqual(self.main("list", str(self.repo)), 0)
+        self.assertIn("t5-r08.md", self.out)
+        self.assertIn("budget override requested", self.out)
+        self.main("run", str(self.req()))
+        self.main("list", str(self.repo))
+        self.assertNotIn("t5-r08.md", self.out)
+        self.assertIn("t5-r09.md", self.out)
+
+    def test_tampered_request_is_refused(self):
+        self.create()
+        good = json.loads(self.req().read_text())
+        other = Path(self.tmp.name) / "other" / ".collab"
+        other.mkdir(parents=True)
+        outside = Path(self.tmp.name) / "outside.txt"
+        outside.write_text("x")
+        import hashlib
+        edits = [
+            ("output", ".collab/kimi-2026-11-20-other.md", "does not match"),
+            ("output", str(other / "kimi-2026-11-20-t5-r08.md"), "does not match"),
+            ("output", "../other/.collab/kimi-2026-11-20-t5-r08.md", "does not match"),
+            ("packets", [{"path": str(outside), "sha256": hashlib.sha256(b"x").hexdigest()}], "outside the repository"),
+            ("packets", [{"path": "../outside.txt", "sha256": hashlib.sha256(b"x").hexdigest()}], "outside the repository"),
+            ("authors", "claude", "malformed"),
+            ("reviewer", "auto", "malformed"),
+        ]
+        for key, value, msg in edits:
+            with self.subTest(key=key, value=value):
+                body = dict(good, **{key: value})
+                self.req().write_text(json.dumps(body))
+                self.assertEqual(self.main("run", str(self.req())), 64)
+                self.assertIn(msg, self.err)
+                self.assertFalse(self.log.exists())
+
+    def test_auto_is_not_a_request_reviewer(self):
+        self.assertEqual(self.create(reviewer="auto", output=".collab/auto-2026-11-20-t5-r08.md"), 64)
+
+    def test_preflight_failure_is_final_and_result_is_claimed_before_sending(self):
+        fail = self.gw / "kimi-review.sh"
+        fail.write_text("#!/bin/zsh\nprint ran >> \"$RR_TEST_LOG\"\nexit 78\n")
+        self.create()
+        self.assertEqual(self.main("run", str(self.req())), 78)
+        result = json.loads(self.req().with_name("kimi-2026-11-20-t5-r08.md.result.json").read_text())
+        self.assertEqual((result["exit_code"], result["artifact"], result["diagnostic"]), (78, None, None))
+        self.main("list", str(self.repo))
+        self.assertNotIn("t5-r08.md", self.out)
+        self.assertEqual(self.main("run", str(self.req())), 73)
+        self.assertEqual(self.log.read_text().count("ran"), 1)
+        # A result file that already exists stops the run before the wrapper is called.
+        self.create(output=".collab/kimi-2026-11-20-t5-r09.md")
+        self.req("kimi-2026-11-20-t5-r09.md").with_name("kimi-2026-11-20-t5-r09.md.result.json").write_text("{}")
+        self.assertEqual(self.main("run", str(self.req("kimi-2026-11-20-t5-r09.md"))), 73)
+        self.assertEqual(self.log.read_text().count("ran"), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

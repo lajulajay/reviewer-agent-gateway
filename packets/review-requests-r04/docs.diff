@@ -1,0 +1,131 @@
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index ac65b6e..58bdf21 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -78,20 +78,17 @@ reviewers/gemini-review.sh --owner <agent> [--author A]... [--author-model M]...
+ ```
+ 
+ Add `--packet-root <dir>` to use a shared prompt or packet from outside the
+-repository (e.g. `~/Developer/reviewer-agent-gateway/prompts`). Options go
++repository. Options go
+ before the model or tier. For automatic selection of mixed-authorship work,
+ repeat `--author <agent>` for every author besides the owner; add `--task <id>` for a delegated task.
+ 
+ For automatic selection, the `auto-` output name is a template; the artifact
+-uses the chosen provider's prefix. New topics go to the active, non-owner
+-and non-author reviewer with the fewest spent review rounds in that repository
+-today and room
+-under that provider's daily cap, with roster order breaking ties. Follow-ups
++uses the chosen provider's prefix. New topics go to the eligible active reviewer
++with the fewest rounds in that repository today and room under its daily cap,
++roster order breaking ties. Follow-ups
+ stay with the topic's latest eligible reviewer when round records establish one
+ unambiguous reviewer; otherwise selection falls back to daily balancing. An
+-existing artifact or diagnostic is never retried under the same name. This
+-local-history rule balances known gateway usage without pretending to measure
+-incomparable provider quotas. The dispatcher fails over only after preflight
++existing artifact or diagnostic is never retried under the same name. The dispatcher fails over only after preflight
+ exit 69 or 78, never after a model call, timeout, validation failure, or budget
+ refusal; if all candidates fail preflight, use Gemini. The template date must
+ be today's local date.
+@@ -141,9 +138,8 @@ Before requesting another round, the owner checks each finding against the
+ evidence. A finding that a script or test disproves is dispositioned
+ `rejected:` with that evidence; it does not justify another round. A
+ `Mechanical check` line gives a quoted value's measured length, not a
+-verdict: the owner reads the finding to see which number it claims for the
+-value. A note that a finding cites a `file://` path means the link verifies
+-nothing; the owner checks any quoted code against the packet before acting.
++verdict. A finding citing a `file://` path verifies nothing; check any quoted
++code against the packet before acting.
+ 
+ ## Packets and isolation
+ 
+@@ -156,15 +152,19 @@ nothing; the owner checks any quoted code against the packet before acting.
+   or commit range, relevant evidence and invariants, the competing claims,
+   the exact decision, prohibited actions, and named questions. Do not ask for
+   repository-wide rediscovery.
+-- Reviewers cannot count characters. Write every hash or long identifier in
+-  8-character groups next to a script-produced length (e.g.
+-  `len=64 groups=ca71fc6a 71fca61d ...`), and give script output for any
+-  check the reviewer cannot run.
+-- Keep hard-tier Gemini packets small: send the delta and the targeted
+-  context, not full source. Above about 150 KB the hard model runs out of
+-  output tokens before it writes the review, and the wrapper refuses it.
++- Reviewers cannot count characters: write hashes and long identifiers in
++  8-character groups with a script-produced length (`len=64 groups=ca71fc6a
++  ...`), and give script output for checks they cannot run.
++- Keep hard-tier Gemini packets to the delta and targeted context; above
++  about 150 KB the model runs out of output and the wrapper refuses them.
+ - Never include `.env` files, credentials, keys, production data, private or
+   raw exports, or unsealed outcomes. Secret paths and symlinks are rejected.
++- **Where packets may go.** Sending a packet through a gateway wrapper (CLI
++  or API route) to a reviewer vendor in `agents.json` needs no per-task
++  approval of the destination (user decision 2026-11-20); all else holds.
++- **Review requests.** An owner that cannot send a packet records it with
++  `review-request.py create`; the user, or an agent they ask, runs it with
++  `review-request.py run` through the normal wrapper (README).
+ 
+ ## Artifacts and records
+ 
+diff --git a/README.md b/README.md
+index da7d52d..85fdd8d 100644
+--- a/README.md
++++ b/README.md
+@@ -5,10 +5,15 @@ prediction-market repositories and other projects. Consumer repositories keep
+ small tracked entrypoints that delegate here. Roles, escalation, and review
+ records are defined in [PROTOCOL.md](PROTOCOL.md).
+ 
+-Kimi runs through the Kimi Code CLI's managed OAuth provider. The wrapper
+-refuses API credentials and model/endpoint overrides, verifies that the selected
+-alias is configured for managed OAuth with no API key, and does not use Ollama
+-or direct Moonshot API configuration.
++Codex and Kimi each have two routes, chosen by `route` in their model policy:
++`subscription` runs the provider's CLI (Kimi through the Kimi Code CLI's
++managed OAuth provider, refusing API credentials and model/endpoint
++overrides), and `api` sends the packet directly to the provider's API with a
++Keychain key under a spend cap (see "API route for Codex and Kimi" below).
++As of 2026-11-20 both providers use `api`. Sending a packet through these
++wrappers to a registered reviewer vendor needs no per-task approval of the
++destination; budget, packet-safety and override rules are unchanged (see
++"Where packets may go" in [PROTOCOL.md](PROTOCOL.md)).
+ 
+ Invocation contract:
+ 
+@@ -257,6 +262,37 @@ in argv, the environment or shell history. (`security add-generic-password
+ -w` truncates typed input at 128 characters, and passing the key as its
+ argument exposes it in the process list.)
+ 
++## Review requests
++
++An owner that cannot send a packet itself (for example a Copilot sub-agent,
++which refuses to transmit source to a third-party API) records a request
++instead; the user, or an agent the user asks, runs it:
++
++```text
++review-request.py create [--packet-root DIR] --reviewer claude|codex|kimi|gemini --tier T
++    --owner O [--author A]... [--author-model M]... [--task ID] [--override-reason TEXT]
++    PROMPT .collab/<provider>-YYYY-MM-DD-<topic>[-rNN].md PACKET...
++review-request.py list [REPO]
++review-request.py run [--apply-override] reviewers/requests/<output name>.request.json
++```
++
++`create` applies the identity and vendor rule, refuses an output or
++diagnostic that already exists, hashes the prompt and every packet file, and
++writes `reviewers/requests/<output name>.request.json`; it sends nothing.
++`run` refuses a request whose files changed or whose output exists, then calls
++the normal wrapper from the repository root with the recorded arguments, so
++every gateway check applies. It ignores any `REVIEW_BUDGET_OVERRIDE` in the
++runner's environment; a request's `--override-reason` is applied only with
++`--apply-override`, which the runner passes only after the user approved that
++round. A request runs at most once: `run` claims `<output name>.result.json`
++before calling the wrapper (nothing is sent if it cannot) and records the
++outcome there; another attempt needs a new request with a new `rNN` name.
++The output must be exactly `.collab/<request name>` and packets must stay in
++the repository or the recorded packet root. The embedded hashes detect files
++changed after `create` but do not authenticate the request, an editable
++record; the wrapper remains the control. Commit the request and result with
++the review they produced.
++
+ ## Gemini reviews through Antigravity CLI
+ 
+ The Gemini wrapper runs reviews through the Antigravity CLI (`agy`) on the
