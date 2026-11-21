@@ -2,10 +2,10 @@
 
 Workstream: 2026-11-21-copilot-phase3
 Owner: Claude (2026-11-21, assigned by the user in this session)
-Status: active
-Branch: copilot-phase3
+Status: done (2026-11-21)
+Branch: copilot-phase3 (merged to main)
 Operational: no
-Links: [Phase 2b](closed/2026-11-21-copilot-phase2b.md), [proposal](../proposals/2026-11-20-copilot-owner.md), [README tickets](../README.md), [protocol](../PROTOCOL.md)
+Links: [Phase 2b](2026-11-21-copilot-phase2b.md), [proposal](../../proposals/2026-11-20-copilot-owner.md), [README tickets](../../README.md), [protocol](../../PROTOCOL.md)
 
 ## Brief
 
@@ -59,16 +59,16 @@ errors (measured against every adopted repository; the others are unchanged).
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | verified r02 | closed |
-| R01-F2 | major | verified r02 | closed |
-| R01-F3 | major | verified r02 | closed |
-| R01-F4 | major | verified r02 | closed |
-| R01-F5 | major | verified r02 | closed |
+| R01-F1 | major | fixed f2bcd9e | closed |
+| R01-F2 | major | fixed f2bcd9e | closed |
+| R01-F3 | major | fixed f2bcd9e | closed |
+| R01-F4 | major | fixed f2bcd9e | closed |
+| R01-F5 | major | fixed f2bcd9e | closed |
 | R01-F6 | major | rejected: owner record only; mapped artifacts predate --author-model so their authoring models are unknown and cannot be supplied by a map; independence stays as recorded then (README) | closed |
-| R01-F7 | major | verified r02 | closed |
-| R01-F8 | minor | verified r02 | closed |
-| R01-F9 | minor | verified r02 | closed |
-| R01-F10 | minor | verified r02 | closed |
+| R01-F7 | major | fixed f2bcd9e | closed |
+| R01-F8 | minor | fixed f2bcd9e | closed |
+| R01-F9 | minor | fixed f2bcd9e | closed |
+| R01-F10 | minor | fixed f2bcd9e | closed |
 
 ## Log
 
@@ -81,3 +81,12 @@ errors (measured against every adopted repository; the others are unchanged).
   a task must match its row; Branch/PR by state; `--follow` for first-add
   dates; templates carry `--author`/`--batch`. F6 rejected (README note).
 - 2026-11-21: r02 Copilot routine ACCEPT; all nine fixed findings resolved.
+- 2026-11-21: merged as f2bcd9e and pushed. r02's resolution lines continue
+  with evidence on the same line, so rows close as `fixed f2bcd9e`.
+- r01: raw review compared with its rows; no unlabeled actionable item
+- r02: raw review compared with its rows; no unlabeled actionable item
+- 2026-11-21: consumer migration prepared: trading-strategies (legacy owner
+  map in the T5 workstream, T5 task row, shims, role files, pin, AGENTS.md
+  pointer, two link fixes) and market-data-platform main (T11 task row,
+  Copilot reviewer shim, shims, role files, pin, AGENTS.md pointer). Both pass
+  `record`; T5 and T11 await integration reviews (D7).
