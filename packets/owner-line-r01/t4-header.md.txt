@@ -1,0 +1,12 @@
+# Index-options T4 gate pipeline
+
+Workstream: 2026-11-20-index-options-t4
+Owner: sponsor's GitHub Copilot agent (user-assigned 2026-11-20)
+Status: Claude Sonnet r05 returned exact ACCEPT; awaiting separate sponsor approval for any commit/push/PR
+Branch: lajulajay-implement-t4-gate-pipeline (based on main)
+Operational: no
+Links: [build spec](../research/index-options/BUILD_SPEC.md), [post-merge dependency check](../research/index-options/POSTMERGE_CHECK_T2_T3_T6_T7.md), [PR #6](https://github.com/lajulajay/trading-strategies/pull/6), [parent workstream](2026-11-18-index-options-build-spec.md)
+
+## Brief
+
+Implement T4 only, after merged T1, T2, T3, T6, T7, and post-merge

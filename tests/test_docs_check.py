@@ -316,6 +316,53 @@ class DocsCheckTest(unittest.TestCase):
         (self.f.repo / "docs-baseline.json").write_text(json.dumps(dict(b, legacy_collab=b["legacy_collab"] + [".collab/new.md"])))
         self.assertIn("legacy list grew after its first commit", self.record()[1])
 
+    def test_owner_line_forms(self):
+        ws = self.f.repo / "workstreams" / "x.md"
+        cases = {
+            "Owner: Copilot (2026-11-20, assigned by the user)": True,
+            "Owner: Claude (from Codex, 2026-10-03, Codex limit reached)": True,
+            "Owner: sponsor's GitHub Copilot agent (user-assigned 2026-11-20)": True,
+            "Owner: the sponsor": False,
+            "Owner: Kimi (2026-11-20)": False,
+            "Owner: sponsor's Copilot agent, reviewed by Kimi": True,  # notes after "," never name the owner
+            "Owner: sponsor's Copilot or Codex agent": False,
+            "Owner: Copilotish helper": False,
+            "Owner: Copilot (reviewer wrapper owner codex)": True,
+            "Owner: Claude (2026-11-18, assigned by the user at 1bc6649); build handed to the sponsor's GitHub Copilot agents": True,
+            "Owner: not Copilot": False,
+            "Owner: human, assisted by Copilot": False,
+            "Owner: Copilot or Codex": False,
+            "Owner: Copilot2": False,
+            "Owner: !Copilot": False,
+            "Owner: Copilot.": False,
+            "Owner: sponsor's Copilot2 agent": False,
+            "Owner: sponsor's GitHub Codex agent": True,
+            "Owner: sponsor's GitHub Kimi agent": False,
+        }
+        for line, ok in cases.items():
+            with self.subTest(line=line):
+                self.f.workstream(GOOD_ROWS)
+                ws.write_text(ws.read_text().replace("Owner: Claude (2026-10-03)", line))
+                code, out = self.record()
+                self.assertEqual("Owner must name" not in out, ok, out)
+
+    def test_legacy_owner_line_passes_but_vendor_check_still_applies(self):
+        ws = self.f.repo / "workstreams" / "x.md"
+        self.f.workstream(GOOD_ROWS)
+        ws.write_text(ws.read_text().replace("Owner: Claude (2026-10-03)",
+                                             "Owner: sponsor's GitHub Copilot agent (user-assigned 2026-11-20)"))
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+        # An artifact whose recorded reviewer shares a vendor with its owner
+        # fails regardless of the workstream's Owner line.
+        art = self.f.repo / ".collab" / "codex-x-r01.md"
+        art.chmod(0o644)
+        self.f.artifact("codex-x-r01.md", REVIEW1.replace("Owner: claude", "Owner: codex"))
+        code, out = self.record()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("r01 breaks reviewer independence", out)
+        self.assertNotIn("Owner must name", out)
+
     def test_broken_link(self):
         self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
         self.assertIn("does not resolve", self.record()[1])

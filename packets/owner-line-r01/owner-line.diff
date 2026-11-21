@@ -1,0 +1,66 @@
+diff --git a/docs-check.py b/docs-check.py
+index 07626d9..a825fa6 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -304,6 +304,21 @@ def standards_pin(repo):
+     return m.group(1) if m else None
+ 
+ 
++def owner_named(value, registry):
++    """True if an Owner line names its owner. The usual form starts with the
++    agent ("Copilot (2026-11-20, ...)"). Lines written before that form was
++    checked, such as "sponsor's GitHub Copilot agent", are accepted when they
++    name exactly one owner agent and no other agent; earlier Owner lines are
++    never rewritten, so the check must not demand it."""
++    owners = agents.owners(registry)
++    first = re.match(r"[A-Za-z]+", value)
++    if first and first.group(0).lower() in owners:
++        return True
++    words = {w.lower() for w in re.findall(r"[A-Za-z]+", value)}
++    named = words & set(registry["channels"])
++    return len(named) == 1 and named <= set(owners)
++
++
+ def record(repo):
+     errors = []
+     base = load_baseline(repo)
+@@ -340,8 +355,7 @@ def record(repo):
+         if not ws.header.get("Owner"):
+             errors.append(f"{name}: no Owner line")
+         for value in ws.header.get("Owner", []):
+-            first = re.match(r"[A-Za-z]+", value)
+-            if not first or first.group(0).lower() not in agents.owners(registry):
++            if not owner_named(value, registry):
+                 errors.append(f"{name}: Owner must name one of {', '.join(agents.owners(registry))}: {value[:60]}")
+         errors.extend(f"{name}: {p}" for p in ws.problems)
+         for rnd, rel in sorted(ws.reviews.items()):
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index a7727bb..4b21adb 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -316,6 +316,25 @@ class DocsCheckTest(unittest.TestCase):
+         (self.f.repo / "docs-baseline.json").write_text(json.dumps(dict(b, legacy_collab=b["legacy_collab"] + [".collab/new.md"])))
+         self.assertIn("legacy list grew after its first commit", self.record()[1])
+ 
++    def test_owner_line_forms(self):
++        ws = self.f.repo / "workstreams" / "x.md"
++        cases = {
++            "Owner: Copilot (2026-11-20, assigned by the user)": True,
++            "Owner: Claude (from Codex, 2026-10-03, Codex limit reached)": True,
++            "Owner: sponsor's GitHub Copilot agent (user-assigned 2026-11-20)": True,
++            "Owner: the sponsor": False,
++            "Owner: Kimi (2026-11-20)": False,
++            "Owner: sponsor's Copilot agent, reviewed by Kimi": False,
++            "Owner: sponsor's Copilot or Codex agent": False,
++            "Owner: Copilotish helper": False,
++        }
++        for line, ok in cases.items():
++            with self.subTest(line=line):
++                self.f.workstream(GOOD_ROWS)
++                ws.write_text(ws.read_text().replace("Owner: Claude (2026-10-03)", line))
++                code, out = self.record()
++                self.assertEqual("Owner must name" not in out, ok, out)
++
+     def test_broken_link(self):
+         self.f.workstream(GOOD_ROWS, extra="See [missing](../nope.md).\n")
+         self.assertIn("does not resolve", self.record()[1])

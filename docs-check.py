@@ -304,6 +304,21 @@ def standards_pin(repo):
     return m.group(1) if m else None
 
 
+def owner_named(value, registry):
+    """True if an Owner line names exactly one owner. Only the head of the
+    line counts: the text before the first "(", ";" or ",", which carries
+    notes such as "(from Codex, ...)". Accepted heads: an owner agent alone
+    ("Copilot"), or the pre-Phase-1 form "sponsor's GitHub Copilot agent".
+    Earlier Owner lines are never rewritten, so that form stays valid."""
+    owners, known = set(agents.owners(registry)), set(registry["channels"])
+    head = re.split(r"[(;,]", value, maxsplit=1)[0].strip()
+    words = [w.lower() for w in re.findall(r"\w+", head)]
+    if re.fullmatch(r"\w+", head) and head.lower() in owners:
+        return True
+    m = re.fullmatch(r"(?:the )?(?:sponsor|user)'s (?:github )?(\w+) agent", head, re.I)
+    return bool(m) and m.group(1).lower() in owners and len(set(words) & known) == 1
+
+
 def record(repo):
     errors = []
     base = load_baseline(repo)
@@ -340,8 +355,7 @@ def record(repo):
         if not ws.header.get("Owner"):
             errors.append(f"{name}: no Owner line")
         for value in ws.header.get("Owner", []):
-            first = re.match(r"[A-Za-z]+", value)
-            if not first or first.group(0).lower() not in agents.owners(registry):
+            if not owner_named(value, registry):
                 errors.append(f"{name}: Owner must name one of {', '.join(agents.owners(registry))}: {value[:60]}")
         errors.extend(f"{name}: {p}" for p in ws.problems)
         for rnd, rel in sorted(ws.reviews.items()):
