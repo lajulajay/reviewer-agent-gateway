@@ -249,6 +249,13 @@ class ApiCallTest(unittest.TestCase):
         self.assertNotIn("invalid_request_error", self.err)  # no server-supplied field is printed
         self.assertNotIn("leaked prompt", self.err)
 
+    def test_server_values_never_reach_the_ledger(self):
+        self.assertEqual(self.call(policy(), openai_reply(status=f"weird {SECRET}")), 70)
+        ledger = (api.STATE / "api-spend-test.jsonl").read_text()
+        self.assertNotIn(SECRET, ledger)
+        self.assertNotIn("weird", ledger)
+        self.assertNotIn(SECRET, self.err)
+
     def test_every_ancestor_directory_is_synced(self):
         synced = []
         with mock.patch.object(api, "_fsync_dir", synced.append):

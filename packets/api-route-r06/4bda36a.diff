@@ -1,0 +1,111 @@
+diff --git a/api-call.py b/api-call.py
+index b7571d3..03ae563 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -32,7 +32,6 @@ failed.
+ """
+ 
+ import fcntl
+-import re
+ import json
+ import math
+ import os
+@@ -142,6 +141,12 @@ def _fsync_dir(path):
+         os.close(fd)
+ 
+ 
++def _durable_chain():
++    """STATE and every ancestor up to the filesystem root: any of them may have
++    just been created by mkdir(parents=True), so all their entries are synced."""
++    return [STATE, *STATE.parents]
++
++
+ def reserve(cfg, tier, bound):
+     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+     call_id = uuid.uuid4().hex
+@@ -150,8 +155,8 @@ def reserve(cfg, tier, bound):
+         # Under the lock, before any reservation is trusted or sent: make the
+         # directory entries durable every time, so a crash or restart between
+         # creation and use can never drop the ledger's pathname.
+-        _fsync_dir(STATE.parent)
+-        _fsync_dir(STATE)
++        for directory in _durable_chain():
++            _fsync_dir(directory)
+         fh.seek(0)
+         already = committed(fh.read().splitlines())
+         if already + bound > cfg["cap_micro"]:
+@@ -261,17 +266,9 @@ def run(argv):
+     except urllib.error.HTTPError as exc:
+         released = exc.code in UNBILLED_HTTP
+         settle(cfg, call_id, 0 if released else bound, f"HTTP {exc.code}")
++        # Nothing from the error body is printed: every field is server-controlled
++        # and may quote the request. The status code alone is reported.
+         detail = ""
+-        try:
+-            err = json.loads(exc.read()[:4000]).get("error")
+-            if isinstance(err, dict):
+-                # Only short identifier-shaped codes are reported; anything else is server text and dropped.
+-                parts = [str(err.get(k)) for k in ("type", "code")
+-                         if isinstance(err.get(k), (str, int)) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(err.get(k)))
+-                         and redact(str(err.get(k))) == str(err.get(k))]
+-                detail = " (" + ", ".join(parts) + ")" if parts else ""
+-        except Exception:
+-            pass  # the body is never echoed: it is untrusted and may quote the request
+         raise Refusal(70, f"API request failed: HTTP {exc.code}{detail}"
+                           + ("" if released else "; full reservation kept"))
+     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+@@ -279,9 +276,10 @@ def run(argv):
+     reply, problem, tin, tout, served = parse(cfg, data)
+     if not problem and not reply.strip():
+         problem = "no text in reply"
++    reply = redact(reply)  # the stored, validated and settled text are the same text
+     if not problem:
+-        # The gateway's substance check runs before settling, so a reply it
+-        # rejects keeps the full bound like any other rejected reply.
++        # The gateway's substance check runs on that exact text before settling,
++        # so a reply it rejects keeps the full bound like any other rejected reply.
+         check = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "reviewer-validate.py")],
+                                input=reply, capture_output=True, text=True)
+         if check.returncode != 0:
+@@ -302,7 +300,7 @@ def run(argv):
+     Path(out_meta).write_text(redact(json.dumps(meta)))
+     if problem:
+         raise Refusal(70, f"API reply rejected: {problem}")
+-    Path(out_text).write_text(redact(reply))
++    Path(out_text).write_text(reply)
+     return 0
+ 
+ 
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index 1b08a83..be26865 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -242,12 +242,26 @@ class ApiCallTest(unittest.TestCase):
+         self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
+         self.assertEqual(self.committed(), self.bound())
+ 
+-    def test_error_codes_reported_only_when_identifier_shaped(self):
++    def test_error_bodies_are_never_printed(self):
+         body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
+         self.assertEqual(self.call(policy(), urllib.error.HTTPError("u", 400, "x", {}, body)), 70)
+-        self.assertIn("invalid_request_error", self.err)
++        self.assertIn("HTTP 400", self.err)
++        self.assertNotIn("invalid_request_error", self.err)  # no server-supplied field is printed
+         self.assertNotIn("leaked prompt", self.err)
+ 
++    def test_every_ancestor_directory_is_synced(self):
++        synced = []
++        with mock.patch.object(api, "_fsync_dir", synced.append):
++            self.assertEqual(self.call(policy(), openai_reply()), 0)
++        self.assertIn(api.STATE, synced)
++        self.assertIn(Path("/"), synced)
++        self.assertTrue(all(p in synced for p in api.STATE.parents))
++
++    def test_validation_runs_on_the_redacted_text(self):
++        reply = openai_reply(text=SECRET + " " + GOOD)
++        self.assertEqual(self.call(policy(), reply), 0)
++        self.assertNotIn(SECRET, (self.base / "out.md").read_text())
++
+     def test_rejected_reply_keeps_full_bound_even_with_zero_usage(self):
+         self.assertEqual(self.call(policy(), openai_reply(text="", usage=(0, 0))), 70)
+         self.assertEqual(self.committed(), self.bound())

@@ -170,7 +170,7 @@ def reserve(cfg, tier, bound):
 def settle(cfg, call_id, amount, note):
     with ledger_path(cfg).open("a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
-        append(fh, {"kind": "settle", "id": call_id, "micro_usd": amount, "note": note,
+        append(fh, {"kind": "settle", "id": call_id, "micro_usd": amount, "note": redact(note)[:120],
                     "at": datetime.now(timezone.utc).isoformat()})
 
 
@@ -286,7 +286,7 @@ def run(argv):
             problem = "substance validation failed"
     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
     if problem:
-        cost, note = bound, f"reply rejected ({problem}): full bound kept"
+        cost, note = bound, "reply rejected: full bound kept"  # fixed text: problem may carry server values
     elif usage_ok:
         cost, note = micro(tin, tout, cfg), "usage"
     else:
