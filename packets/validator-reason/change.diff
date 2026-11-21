@@ -1,0 +1,49 @@
+diff --git a/api-call.py b/api-call.py
+index 6c4c899..a8f6414 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -355,7 +355,12 @@ def run(argv):
+         check = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "reviewer-validate.py")],
+                                input=reply, capture_output=True, text=True)
+         if check.returncode != 0:
+-            problem = "substance validation failed"
++            # The validator prints one fixed-text reason; surface it so a refused
++            # round can be fixed rather than guessed at. The ledger note below stays
++            # fixed text; the reason goes only to stderr and the meta file.
++            lines = [l.strip() for l in check.stderr.splitlines() if l.strip()]
++            reason = "".join(c for c in redact(lines[-1]) if c.isprintable())[:200] if lines else ""
++            problem = "substance validation failed" + (f": {reason}" if reason else "")
+     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
+     if problem:
+         cost, note = bound, "reply rejected: full bound kept"  # fixed text: problem may carry server values
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index 40eb55f..50e8ba8 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -338,6 +338,26 @@ class ApiCallTest(unittest.TestCase):
+         self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
+         self.assertEqual(self.committed(), self.bound())
+ 
++    def test_substance_rejection_surfaces_the_validator_reason(self):
++        text = GOOD.replace("VERDICT: ACCEPT", "VERDICT: ACCEPT WITH CONDITIONS")
++        self.assertEqual(self.call(policy(), openai_reply(text=text)), 70)
++        self.assertIn("API reply rejected: substance validation failed: an ACCEPT WITH CONDITIONS "
++                      "verdict needs at least one labeled C<n> condition", self.err)
++        self.assertIn("needs at least one labeled C<n> condition", json.loads((self.base / "meta.json").read_text())["problem"])
++        self.assertEqual([e["note"] for e in self.entries() if e["kind"] == "settle"], ["reply rejected: full bound kept"])
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_validator_reason_is_redacted_and_truncated(self):
++        long = "x" * 500
++        fake = mock.Mock(returncode=1, stderr=f"noise\n{SECRET} {long}\x1b[31m\n")
++        with mock.patch.object(api.subprocess, "run", return_value=fake):
++            self.assertEqual(self.call(policy(), openai_reply()), 70)
++        self.assertNotIn(SECRET, self.err)
++        self.assertNotIn("\x1b", self.err)
++        reason = self.err.split("substance validation failed: ", 1)[1].strip()
++        self.assertTrue(reason.startswith("[REDACTED] x"))
++        self.assertEqual(len(reason), 200)
++
+     def test_error_bodies_are_never_printed(self):
+         body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
+         self.assertEqual(self.call(policy(), urllib.error.HTTPError("u", 400, "x", {}, body)), 70)

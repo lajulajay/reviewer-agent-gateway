@@ -35,6 +35,7 @@ import fcntl
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -65,6 +66,34 @@ def redact(text):
             for form in (s, json.dumps(s)[1:-1]):
                 text = text.replace(form, "[REDACTED]")
     return text
+
+
+# reviewer-validate.py's rejection messages. Only these fixed texts are ever
+# reported, so no reply-derived text (a finding's label or severity, a
+# traceback) reaches stderr, the diagnostic or the meta file. The ledger note
+# stays fixed text regardless.
+VALIDATOR_REASONS = (
+    "review must end with exactly one approved verdict: "
+    "VERDICT: ACCEPT, VERDICT: ACCEPT WITH CONDITIONS, or VERDICT: REJECT",
+    "review has multiple approved verdict lines",
+    "approved verdict must be the final non-empty line",
+    "review must include the line: ATTESTATION: all actionable findings and conditions are labeled.",
+    "finding and condition labels must be unique",
+    "a REJECT verdict needs at least one labeled F<n> [severity] finding",
+    "an ACCEPT WITH CONDITIONS verdict needs at least one labeled C<n> condition",
+    "review is procedural narration rather than review content",
+)
+
+
+def validator_reason(code, stderr):
+    """Map the validator's stderr to a fixed reason; never echo it."""
+    if stderr.endswith("\n") and stderr[:-1] in VALIDATOR_REASONS:
+        return stderr[:-1]
+    if re.fullmatch(r"review is shorter than [0-9]{1,6} characters\n", stderr):
+        return stderr[:-1]
+    if code == 1 and re.match(r"finding F[0-9]+ has severity \[", stderr):
+        return "a finding has a severity other than blocker, major or minor"
+    return f"unrecognized validator output (exit {code if type(code) is int else '?'})"
 
 
 def _positive(value, label, allow_zero=False):
@@ -355,7 +384,7 @@ def run(argv):
         check = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "reviewer-validate.py")],
                                input=reply, capture_output=True, text=True)
         if check.returncode != 0:
-            problem = "substance validation failed"
+            problem = f"substance validation failed: {validator_reason(check.returncode, check.stderr)}"
     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
     if problem:
         cost, note = bound, "reply rejected: full bound kept"  # fixed text: problem may carry server values

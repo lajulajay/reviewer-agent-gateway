@@ -1,0 +1,123 @@
+diff --git a/api-call.py b/api-call.py
+index 6c4c899..cc5d4d4 100644
+--- a/api-call.py
++++ b/api-call.py
+@@ -35,6 +35,7 @@ import fcntl
+ import json
+ import math
+ import os
++import re
+ import subprocess
+ import sys
+ import time
+@@ -67,6 +68,34 @@ def redact(text):
+     return text
+ 
+ 
++# reviewer-validate.py's rejection messages. Only these fixed texts are ever
++# reported, so no reply-derived text (a finding's label or severity, a
++# traceback) reaches stderr, the diagnostic or the meta file. The ledger note
++# stays fixed text regardless.
++VALIDATOR_REASONS = (
++    "review must end with exactly one approved verdict: "
++    "VERDICT: ACCEPT, VERDICT: ACCEPT WITH CONDITIONS, or VERDICT: REJECT",
++    "review has multiple approved verdict lines",
++    "approved verdict must be the final non-empty line",
++    "review must include the line: ATTESTATION: all actionable findings and conditions are labeled.",
++    "finding and condition labels must be unique",
++    "a REJECT verdict needs at least one labeled F<n> [severity] finding",
++    "an ACCEPT WITH CONDITIONS verdict needs at least one labeled C<n> condition",
++    "review is procedural narration rather than review content",
++)
++
++
++def validator_reason(code, stderr):
++    """Map the validator's stderr to a fixed reason; never echo it."""
++    if stderr.endswith("\n") and stderr[:-1] in VALIDATOR_REASONS:
++        return stderr[:-1]
++    if re.fullmatch(r"review is shorter than [0-9]{1,6} characters\n", stderr):
++        return stderr[:-1]
++    if code == 1 and re.match(r"finding F[0-9]+ has severity \[", stderr):
++        return "a finding has a severity other than blocker, major or minor"
++    return f"unrecognized validator output (exit {code if type(code) is int else '?'})"
++
++
+ def _positive(value, label, allow_zero=False):
+     v = float(value)
+     if not math.isfinite(v) or v < 0 or (v == 0 and not allow_zero):
+@@ -355,7 +384,7 @@ def run(argv):
+         check = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "reviewer-validate.py")],
+                                input=reply, capture_output=True, text=True)
+         if check.returncode != 0:
+-            problem = "substance validation failed"
++            problem = f"substance validation failed: {validator_reason(check.returncode, check.stderr)}"
+     usage_ok = all(type(v) is int and v >= 0 for v in (tin, tout))
+     if problem:
+         cost, note = bound, "reply rejected: full bound kept"  # fixed text: problem may carry server values
+diff --git a/tests/test_api_call.py b/tests/test_api_call.py
+index 40eb55f..3c12194 100644
+--- a/tests/test_api_call.py
++++ b/tests/test_api_call.py
+@@ -3,6 +3,7 @@ import importlib.util
+ import io
+ import json
+ import math
++import re
+ import tempfile
+ import threading
+ import unittest
+@@ -338,6 +339,54 @@ class ApiCallTest(unittest.TestCase):
+         self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
+         self.assertEqual(self.committed(), self.bound())
+ 
++    def test_substance_rejection_surfaces_the_validator_reason(self):
++        text = GOOD.replace("VERDICT: ACCEPT", "VERDICT: ACCEPT WITH CONDITIONS")
++        self.assertEqual(self.call(policy(), openai_reply(text=text)), 70)
++        self.assertIn("API reply rejected: substance validation failed: an ACCEPT WITH CONDITIONS "
++                      "verdict needs at least one labeled C<n> condition", self.err)
++        self.assertIn("needs at least one labeled C<n> condition", json.loads((self.base / "meta.json").read_text())["problem"])
++        self.assertEqual([e["note"] for e in self.entries() if e["kind"] == "settle"], ["reply rejected: full bound kept"])
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_reply_derived_validator_text_is_never_echoed(self):
++        # The severity message interpolates reply text; a carriage return would
++        # split it, and a NUL-separated key would survive redaction. Neither is echoed.
++        split_key = "\x00".join(SECRET)
++        text = f"F1 [weird\r{split_key}]\n" + GOOD
++        self.assertEqual(self.call(policy(), openai_reply(text=text)), 70)
++        meta = (self.base / "meta.json").read_text()
++        for out in (self.err, meta):
++            self.assertIn("substance validation failed: a finding has a severity other than blocker, major or minor", out)
++            self.assertNotIn("weird", out)
++            self.assertNotIn("\\u0000", out)
++            self.assertNotIn("\x00", out)
++        self.assertEqual(self.err.count("\n"), 1)  # one line: the wrapper's diagnostic quotes the last line
++        self.assertEqual(self.committed(), self.bound())
++
++    def test_unrecognized_validator_output_is_not_echoed(self):
++        cases = [(1, f"Traceback (most recent call last):\nValueError: {SECRET} leaked text\n"),
++                 (1, "review has multiple approved verdict lines\nextra\n"),
++                 (2, "review is shorter than 4000000 characters\n"),
++                 (-9, "")]
++        for code, stderr in cases:
++            with self.subTest(stderr=stderr[:30]):
++                fake = mock.Mock(returncode=code, stderr=stderr)
++                with mock.patch.object(api.subprocess, "run", return_value=fake):
++                    self.assertEqual(self.call(policy(), openai_reply()), 70)
++                self.assertIn(f"substance validation failed: unrecognized validator output (exit {code})", self.err)
++                self.assertNotIn("leaked", self.err)
++                self.assertNotIn("extra", self.err)
++                self.assertNotIn(SECRET, self.err)
++
++    def test_every_fixed_validator_message_is_recognized(self):
++        source = (ROOT / "reviewer-validate.py").read_text()
++        fixed = re.findall(r'print\(\s*((?:"[^"\n]*"\s*)+),\s*file=sys\.stderr', source)
++        messages = ["".join(re.findall(r'"([^"]*)"', m)) for m in fixed]
++        self.assertEqual(len(messages), len(api.VALIDATOR_REASONS))
++        self.assertEqual(sorted(messages), sorted(api.VALIDATOR_REASONS))
++        self.assertEqual(api.validator_reason(1, "review is shorter than 400 characters\n"),
++                         "review is shorter than 400 characters")
++
+     def test_error_bodies_are_never_printed(self):
+         body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
+         self.assertEqual(self.call(policy(), urllib.error.HTTPError("u", 400, "x", {}, body)), 70)

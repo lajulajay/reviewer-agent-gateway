@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 import importlib.util
+import ast
 import io
 import json
 import math
+import subprocess
+import sys
+import re
 import tempfile
 import threading
 import unittest
@@ -337,6 +341,95 @@ class ApiCallTest(unittest.TestCase):
     def test_substance_rejected_reply_keeps_full_bound(self):
         self.assertEqual(self.call(policy(), openai_reply(text="VERDICT: ACCEPT")), 70)
         self.assertEqual(self.committed(), self.bound())
+
+    def test_substance_rejection_surfaces_the_validator_reason(self):
+        text = GOOD.replace("VERDICT: ACCEPT", "VERDICT: ACCEPT WITH CONDITIONS")
+        self.assertEqual(self.call(policy(), openai_reply(text=text)), 70)
+        self.assertIn("API reply rejected: substance validation failed: an ACCEPT WITH CONDITIONS "
+                      "verdict needs at least one labeled C<n> condition", self.err)
+        self.assertIn("needs at least one labeled C<n> condition", json.loads((self.base / "meta.json").read_text())["problem"])
+        self.assertEqual([e["note"] for e in self.entries() if e["kind"] == "settle"], ["reply rejected: full bound kept"])
+        self.assertEqual(self.committed(), self.bound())
+
+    def test_reply_derived_validator_text_is_never_echoed(self):
+        # The severity message interpolates reply text; a carriage return would
+        # split it, and a NUL-separated key would survive redaction. Neither is echoed.
+        split_key = "\x00".join(SECRET)
+        text = f"F1 [weird\r{split_key}]\n" + GOOD
+        self.assertEqual(self.call(policy(), openai_reply(text=text)), 70)
+        meta = (self.base / "meta.json").read_text()
+        for out in (self.err, meta):
+            self.assertIn("substance validation failed: a finding has a severity other than blocker, major or minor", out)
+            self.assertNotIn("weird", out)
+            self.assertNotIn("\\u0000", out)
+            self.assertNotIn("\x00", out)
+        self.assertEqual(self.err.count("\n"), 1)  # one line: the wrapper's diagnostic quotes the last line
+        self.assertEqual(self.committed(), self.bound())
+
+    def test_unrecognized_validator_output_is_not_echoed(self):
+        cases = [(1, f"Traceback (most recent call last):\nValueError: {SECRET} leaked text\n"),
+                 (1, "review has multiple approved verdict lines\nextra\n"),
+                 (2, "review is shorter than 4000000 characters\n"),
+                 (-9, "")]
+        for code, stderr in cases:
+            with self.subTest(stderr=stderr[:30]):
+                fake = mock.Mock(returncode=code, stderr=stderr)
+                with mock.patch.object(api.subprocess, "run", return_value=fake):
+                    self.assertEqual(self.call(policy(), openai_reply()), 70)
+                self.assertIn(f"substance validation failed: unrecognized validator output (exit {code})", self.err)
+                self.assertNotIn("leaked", self.err)
+                self.assertNotIn("extra", self.err)
+                self.assertNotIn(SECRET, self.err)
+
+    @staticmethod
+    def stderr_messages(source):
+        """Every print(..., file=sys.stderr) in source: fixed strings, and a count of formatted ones."""
+        fixed, formatted = [], 0
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print" and \
+                    any(k.arg == "file" and ast.unparse(k.value) == "sys.stderr" for k in node.keywords):
+                arg = node.args[0]
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    fixed.append(arg.value)
+                else:
+                    formatted += 1
+        return fixed, formatted
+
+    def test_every_fixed_validator_message_is_recognized(self):
+        fixed, formatted = self.stderr_messages((ROOT / "reviewer-validate.py").read_text())
+        self.assertEqual(sorted(fixed), sorted(api.VALIDATOR_REASONS))
+        self.assertEqual(formatted, 2)  # "shorter than" and the severity message, both handled by pattern
+        self.assertEqual(api.validator_reason(1, "review is shorter than 400 characters\n"),
+                         "review is shorter than 400 characters")
+
+    @staticmethod
+    def formatted_reasons(validator):
+        """Run validator on replies that trigger its two formatted messages; map each output."""
+        severity = "F1 [critical]: x\n" + GOOD
+        out = []
+        for text in ("short", severity):
+            r = subprocess.run([sys.executable, str(validator)], input=text, capture_output=True, text=True)
+            out.append(api.validator_reason(r.returncode, r.stderr))
+        return out
+
+    def test_formatted_validator_messages_are_recognized(self):
+        self.assertEqual(self.formatted_reasons(ROOT / "reviewer-validate.py"),
+                         ["review is shorter than 400 characters",
+                          "a finding has a severity other than blocker, major or minor"])
+        source = (ROOT / "reviewer-validate.py").read_text()
+        edits = [('f"review is shorter than {minimum} characters"', 'f"review shorter than {minimum} chars"'),
+                 ('f"finding F{m.group(1)} has severity', 'f"F{m.group(1)} has severity')]
+        for i, (before, after) in enumerate(edits):
+            with self.subTest(edit=after):
+                self.assertIn(before, source)
+                changed = self.base / "reviewer-validate.py"
+                changed.write_text(source.replace(before, after))
+                self.assertIn("unrecognized validator output (exit 1)", self.formatted_reasons(changed)[i])
+
+    def test_sync_check_sees_every_quote_style(self):
+        source = ("import sys\nprint('single quoted', file=sys.stderr)\nprint(\"a\" \"b\", file=sys.stderr)\n"
+                  "print(\"\"\"triple\"\"\", file=sys.stderr)\nprint(f'{1}', file=sys.stderr)\nprint('stdout')\n")
+        self.assertEqual(self.stderr_messages(source), (["single quoted", "ab", "triple"], 1))
 
     def test_error_bodies_are_never_printed(self):
         body = io.BytesIO(json.dumps({"error": {"type": "invalid_request_error", "code": "Review this. leaked prompt"}}).encode())
