@@ -2,10 +2,10 @@
 
 Workstream: 2026-11-21-api-validator-reason
 Owner: Claude (2026-11-21, assigned by the user in this session)
-Status: active
-Branch: api-validator-reason
+Status: done (2026-11-21)
+Branch: api-validator-reason (merged to main)
 Operational: no
-Links: [API streaming workstream](2026-11-20-api-streaming.md)
+Links: [API streaming workstream](../2026-11-20-api-streaming.md)
 
 ## Brief
 
@@ -59,15 +59,15 @@ server-supplied value reaches the ledger.
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | blocker | verified r02 | resolved |
-| R01-F2 | major | verified r02 | resolved |
-| R01-F3 | minor | verified r02 | resolved |
-| R01-C1 | condition | verified r02 | resolved |
-| R01-C2 | condition | verified r02 | resolved |
-| R02-F1 | minor | verified r03 | resolved |
-| R02-C1 | condition | verified r03 | resolved |
-| R03-F1 | minor | verified r04 | resolved |
-| R03-C1 | condition | verified r04 | resolved |
+| R01-F1 | blocker | verified r02 | closed |
+| R01-F2 | major | verified r02 | closed |
+| R01-F3 | minor | verified r02 | closed |
+| R01-C1 | condition | verified r02 | closed |
+| R01-C2 | condition | verified r02 | closed |
+| R02-F1 | minor | fixed 5a2ea3c | closed |
+| R02-C1 | condition | verified r03 | closed |
+| R03-F1 | minor | verified r04 | closed |
+| R03-C1 | condition | verified r04 | closed |
 
 ## Log
 
@@ -75,5 +75,10 @@ server-supplied value reaches the ledger.
   `api-validator-reason`. Codex r01 REJECT (the severity message echoes reply
   text); moved to a fixed-reason allow-list. r02 and r03 ACCEPT WITH
   CONDITIONS on sync-test coverage; r04 ACCEPT. Unit suite, wrapper smoke
-  test and `docs-check.py record .` pass. Commit, push and merge await the
-  user.
+  test and `docs-check.py record .` pass.
+- r01: raw review compared with its rows; no unlabeled actionable item
+- r02: raw review compared with its rows; no unlabeled actionable item
+- r03: raw review compared with its rows; no unlabeled actionable item
+- r04: raw review compared with its rows; no unlabeled actionable item
+- 2026-11-21: user approved commit, push and merge ("approved to commit,
+  push and merge"); merged to main as `5a2ea3c`. Closed.
