@@ -200,13 +200,83 @@ def opener():
 def build(cfg, text):
     if cfg["style"] == "openai-responses":
         body = {"model": cfg["model"], "input": text, "max_output_tokens": cfg["max_output_tokens"],
-                "store": False, "tools": []}
+                "store": False, "tools": [], "stream": True}
         if cfg["effort"]:
             body["reasoning"] = {"effort": cfg["effort"]}
         return cfg["base_url"] + "/responses", body
     body = {"model": cfg["model"], "messages": [{"role": "user", "content": text}],
-            "max_tokens": cfg["max_output_tokens"], "n": 1}
+            "max_tokens": cfg["max_output_tokens"], "n": 1, "stream": True}
     return cfg["base_url"] + "/chat/completions", body
+
+
+MAX_REPLY_BYTES = 32 * 1024 * 1024
+READ_TIMEOUT = 300  # seconds of silence tolerated between streamed lines
+
+
+def _events(first, resp, deadline):
+    """Yield the JSON payloads of a server-sent event stream, starting with the
+    already-read line `first`. Stops at "[DONE]" or end of stream."""
+    seen, line = 0, first
+    while line:
+        seen += len(line)
+        if seen > MAX_REPLY_BYTES:
+            raise ValueError("reply too large")
+        if time.time() > deadline:
+            raise TimeoutError("overall deadline passed")
+        text = line.decode("utf-8").strip()
+        if text.startswith("data:"):
+            payload = text[5:].strip()
+            if payload == "[DONE]":
+                return
+            yield json.loads(payload)
+        line = resp.readline()
+
+
+def read_reply(cfg, resp, deadline):
+    """Return the reply as the non-streamed JSON object parse() expects.
+    Streaming keeps the connection active while the model reasons, so long
+    reviews are not cut off by server idle limits. A server that ignores
+    "stream" answers with plain JSON, which is accepted as before."""
+    first = resp.readline()
+    while first and not first.strip():
+        first = resp.readline()
+    if not first.lstrip().startswith((b"data:", b"event:", b":")):
+        rest = resp.read(MAX_REPLY_BYTES + 1)
+        if len(first) + len(rest) > MAX_REPLY_BYTES:
+            raise ValueError("reply too large")
+        return json.loads(first + rest)
+    if cfg["style"] == "openai-responses":
+        final = None
+        for ev in _events(first, resp, deadline):
+            if ev.get("type") in ("response.completed", "response.incomplete", "response.failed") \
+                    and isinstance(ev.get("response"), dict):
+                final = ev["response"]
+        # No terminal event: parse() reports the missing status as a problem.
+        return final if final is not None else {"status": "stream ended without a final response"}
+    choices, usage, model = {}, None, None
+    for ev in _events(first, resp, deadline):
+        model = ev.get("model") or model
+        if isinstance(ev.get("usage"), dict):
+            usage = ev["usage"]
+        if "error" in ev:
+            choices.setdefault(-1, {"finish_reason": "error", "message": {"content": ""}})
+        for ch in ev.get("choices") or []:
+            c = choices.setdefault(ch.get("index", 0), {"finish_reason": None, "message": {"content": ""}})
+            d = ch.get("delta") or {}
+            if isinstance(d.get("content"), str):
+                c["message"]["content"] += d["content"]
+            if d.get("tool_calls"):
+                c["message"]["tool_calls"] = d["tool_calls"]
+            if "function_call" in d:
+                c["message"]["function_call"] = d["function_call"]
+            if ch.get("finish_reason"):
+                c["finish_reason"] = ch["finish_reason"]
+            if isinstance(ch.get("usage"), dict):  # Moonshot reports usage inside the choice
+                usage = ch["usage"]
+    data = {"model": model, "choices": [choices[k] for k in sorted(choices)]}
+    if usage is not None:
+        data["usage"] = usage
+    return data
 
 
 def parse(cfg, data):
@@ -243,7 +313,7 @@ def run(argv):
     cfg = load(policy, tier)
     try:
         text = Path(prompt_file).read_text()
-        timeout = int(os.environ.get("REVIEWER_API_TIMEOUT_SECONDS", "900"))
+        timeout = int(os.environ.get("REVIEWER_API_TIMEOUT_SECONDS", "1800"))  # whole call, not per read
         if timeout < 1:
             raise ValueError("timeout must be positive")
     except (OSError, ValueError) as exc:
@@ -259,10 +329,10 @@ def run(argv):
     Path(marker).touch()
     start = time.time()
     try:
-        with opener().open(req, timeout=timeout) as resp:
+        with opener().open(req, timeout=min(timeout, READ_TIMEOUT)) as resp:
             if urllib.parse.urlsplit(resp.geturl()).hostname != cfg["host"]:
                 raise Refusal(70, "response came from an unexpected host; reservation kept")
-            data = json.loads(resp.read())
+            data = read_reply(cfg, resp, start + timeout)
     except urllib.error.HTTPError as exc:
         released = exc.code in UNBILLED_HTTP
         settle(cfg, call_id, 0 if released else bound, f"HTTP {exc.code}")
@@ -273,6 +343,8 @@ def run(argv):
                           + ("" if released else "; full reservation kept"))
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         raise Refusal(70, f"API request failed ({type(exc).__name__}); full reservation kept")
+    if not isinstance(data, dict):
+        data = {"status": "reply is not a JSON object"}
     reply, problem, tin, tout, served = parse(cfg, data)
     if not problem and not reply.strip():
         problem = "no text in reply"

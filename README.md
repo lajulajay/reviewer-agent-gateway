@@ -216,6 +216,14 @@ and replaces only the model call with `api-call.py`:
   The review is accepted only from a complete reply (`status: completed`, or
   exactly one choice with `finish_reason: stop`) with no tool item, tool
   call, or function call; anything else fails with exit 70.
+- **Streaming.** The request asks for a streamed reply (`stream: true`) so
+  long reasoning is not cut off by provider limits on silent connections
+  (Moonshot closed a non-streamed hard-tier call at 600 s). The stream is
+  reassembled into the same reply object and passes the same checks; a server
+  that ignores the flag answers with plain JSON, which is accepted. A stream
+  without a final event, an error event, or more than one choice is a
+  rejected reply. The whole call may take `REVIEWER_API_TIMEOUT_SECONDS`
+  (default 1800); up to 300 s of silence between lines is tolerated.
 - **Key handling.** The key is read from the Keychain item named by
   `keychain_service` inside the process, checked for printable ASCII without
   being echoed, and sent only in the Authorization header. Redirects are

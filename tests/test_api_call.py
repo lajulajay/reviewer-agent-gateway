@@ -51,6 +51,23 @@ def openai_reply(text=GOOD, status="completed", usage=(1000, 500), extra=()):
     return r
 
 
+def sse(*events, done=True):
+    body = "".join(f"event: x\ndata: {json.dumps(e)}\n\n" for e in events)
+    return (": keep-alive\n\n" + body + ("data: [DONE]\n\n" if done else "")).encode()
+
+
+def chat_chunks(text=GOOD, finish="stop", usage_in_choice=True, extra_delta=None):
+    parts = [text[i:i + 50] for i in range(0, len(text), 50)]
+    evs = [{"model": "kimi-k2.6", "choices": [{"index": 0, "delta": {"role": "assistant"}}]}]
+    evs += [{"model": "kimi-k2.6", "choices": [{"index": 0, "delta": {"content": p}}]} for p in parts]
+    last = {"index": 0, "delta": dict(extra_delta or {}), "finish_reason": finish}
+    usage = {"prompt_tokens": 10, "completion_tokens": 5}
+    if usage_in_choice:
+        last["usage"] = usage
+    evs.append({"model": "kimi-k2.6", "choices": [last], **({} if usage_in_choice else {"usage": usage})})
+    return evs
+
+
 class ApiCallTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -114,6 +131,85 @@ class ApiCallTest(unittest.TestCase):
         self.assertEqual(self.committed(), math.ceil(1000 * 2.0 + 500 * 10.0))
         self.assertEqual([e["kind"] for e in self.entries()], ["reserve", "settle"])
         self.assertTrue(self.marker.exists())
+
+    # --- streaming
+    def test_requests_ask_for_streaming(self):
+        self.call(policy(), openai_reply())
+        self.assertIs(self.sent[0][2]["stream"], True)
+        self.call(policy("chat-completions"), Resp(sse(*chat_chunks())))
+        self.assertIs(self.sent[1][2]["stream"], True)
+
+    def test_streamed_responses_reply_uses_the_final_event(self):
+        stream = sse({"type": "response.created", "response": {"status": "in_progress"}},
+                     {"type": "response.output_text.delta", "delta": "partial"},
+                     {"type": "response.completed", "response": openai_reply()}, done=False)
+        self.assertEqual(self.call(policy(), Resp(stream)), 0)
+        self.assertEqual((self.base / "out.md").read_text(), GOOD)
+        self.assertEqual(self.committed(), math.ceil(1000 * 2.0 + 500 * 10.0))
+
+    def test_streamed_responses_without_final_event_keeps_the_bound(self):
+        stream = sse({"type": "response.output_text.delta", "delta": GOOD}, done=False)
+        self.assertEqual(self.call(policy(), Resp(stream)), 70)
+        self.assertEqual(self.committed(), self.bound())
+        self.assertFalse((self.base / "out.md").exists())
+
+    def test_streamed_incomplete_response_is_rejected(self):
+        stream = sse({"type": "response.incomplete", "response": openai_reply(status="incomplete")})
+        self.assertEqual(self.call(policy(), Resp(stream)), 70)
+        self.assertEqual(self.committed(), self.bound())
+
+    def test_streamed_chat_reply_is_assembled_with_usage_from_the_choice(self):
+        self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*chat_chunks()))), 0)
+        self.assertEqual((self.base / "out.md").read_text(), GOOD)
+        self.assertEqual(self.committed(), math.ceil(10 * 2.0 + 5 * 10.0))
+
+    def test_streamed_chat_usage_at_top_level(self):
+        self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*chat_chunks(usage_in_choice=False)))), 0)
+        self.assertEqual(self.committed(), math.ceil(10 * 2.0 + 5 * 10.0))
+
+    def test_streamed_chat_length_and_tool_calls_are_rejected(self):
+        self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*chat_chunks(finish="length")))), 70)
+        self.assertIn("finish_reason", self.err)
+        self.assertEqual(self.call(policy("chat-completions"),
+                                   Resp(sse(*chat_chunks(extra_delta={"tool_calls": [{"id": "t"}]})))), 70)
+        self.assertIn("tool call", self.err)
+
+    def test_streamed_chat_two_choices_and_error_event_are_rejected(self):
+        evs = chat_chunks() + [{"choices": [{"index": 1, "delta": {"content": "x"}, "finish_reason": "stop"}]}]
+        self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*evs))), 70)
+        self.assertIn("choices", self.err)
+        evs = chat_chunks() + [{"error": {"message": SECRET}}]
+        self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*evs))), 70)
+        self.assertNotIn(SECRET, self.err)
+
+    def test_streamed_secret_is_redacted_and_malformed_stream_keeps_the_bound(self):
+        text = GOOD.replace("testable.", f"testable {SECRET}.", 1)
+        self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*chat_chunks(text=text)))), 0)
+        self.assertNotIn(SECRET, (self.base / "out.md").read_text())
+        before = self.committed()
+        self.assertEqual(self.call(policy("chat-completions"), Resp(b"data: {not json\n\n")), 70)
+        self.assertGreater(self.committed(), before)
+        self.assertIn("full reservation kept", self.err)
+
+    def test_plain_json_fallback_and_its_size_bound(self):
+        # A server that ignores "stream" answers with plain JSON (leading blank lines allowed).
+        self.assertEqual(self.call(policy(), Resp(b"\n\n" + json.dumps(openai_reply()).encode())), 0)
+        self.assertEqual((self.base / "out.md").read_text(), GOOD)
+        with mock.patch.object(api, "MAX_REPLY_BYTES", 100):
+            self.assertEqual(self.call(policy(), openai_reply()), 70)
+            self.assertIn("full reservation kept", self.err)
+            self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*chat_chunks()))), 70)
+            self.assertIn("full reservation kept", self.err)
+
+    def test_non_object_json_reply_is_rejected(self):
+        self.assertEqual(self.call(policy(), Resp(b"[1, 2]")), 70)
+        self.assertEqual(self.committed(), self.bound())
+
+    def test_overall_deadline_applies_to_streams(self):
+        with mock.patch.dict("os.environ", {"REVIEWER_API_TIMEOUT_SECONDS": "5"}), \
+                mock.patch.object(api.time, "time", side_effect=[0, 0] + [100] * 50):
+            self.assertEqual(self.call(policy("chat-completions"), Resp(sse(*chat_chunks()))), 70)
+        self.assertIn("TimeoutError", self.err)
 
     def test_chat_request_asks_for_one_choice(self):
         reply = {"model": "k", "choices": [{"finish_reason": "stop", "message": {"content": GOOD}}],
