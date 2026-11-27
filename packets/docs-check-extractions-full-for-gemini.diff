@@ -1,0 +1,161 @@
+diff --git a/docs-check.py b/docs-check.py
+index 9cc87dd..a3d8039 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -341,6 +341,46 @@ def check_links(repo, errors):
+                 errors.append(f"link: {f.relative_to(repo)} -> {link} does not resolve")
+ 
+ 
++def review_statements(ws):
++    """A workstream's Reviews-section text, where an owner records statements about
++    review artifacts; empty if that section contains any code fence or HTML comment
++    marker, so no quoted or commented-out line can count as a statement."""
++    text = "\n".join(ws.sections.get("Reviews", []))
++    return "" if any(m in text for m in ("```", "~~~", "<!--", "-->")) else text
++
++
++def extraction_error(f, rel, ws_text):
++    """Why a .collab '<stem>.extracted.md' is not an accepted owner extraction of a
++    failed invocation's review text, or None. It qualifies only beside the wrapper's
++    '<stem>.diagnostic.json' recording a non-zero exit, with a '.sha256' sidecar
++    whose first field is its SHA-256, and when a line in a workstream's Reviews
++    section (one with no code fence or HTML comment marker) reads exactly
++    "Owner extraction of a failed invocation: `<path>`" (the owner's classification)."""
++    stem = f.name[: -len(".extracted.md")]
++    diag = f.with_name(stem + ".diagnostic.json")
++    side = f.with_name(f.name + ".sha256")
++    if not diag.is_file():
++        return f"no {stem}.diagnostic.json beside it"
++    try:
++        code = json.loads(diag.read_text()).get("exit_code")
++    except (OSError, UnicodeDecodeError, ValueError, AttributeError, RecursionError):
++        return f"{stem}.diagnostic.json is unreadable or malformed"
++    if not isinstance(code, int) or isinstance(code, bool) or code == 0:
++        return f"{stem}.diagnostic.json records no failed exit code"
++    if not side.is_file():
++        return "no checksum sidecar"
++    try:
++        digest = side.read_text().split()
++        actual = hashlib.sha256(f.read_bytes()).hexdigest()
++    except (OSError, UnicodeDecodeError):
++        return "checksum sidecar or extraction is unreadable"
++    if not digest or digest[0] != actual:
++        return "checksum sidecar is malformed or does not match"
++    if not re.search(rf"(?m)^\s*(?:- )?Owner extraction of a failed invocation: `{re.escape(rel)}`\.?[ \t]*$", ws_text):
++        return f"no workstream line 'Owner extraction of a failed invocation: `{rel}`'"
++    return None
++
++
+ def standards_pin(repo):
+     agents = repo / "AGENTS.md"
+     m = re.search(r"(?m)^Standards: reviewer-agent-gateway@([0-9a-f]{7,40})\s*$", agents.read_text()) if agents.is_file() else None
+@@ -475,6 +515,7 @@ def record(repo):
+         for rid in ws.rows:
+             if int(ROW_ID.match(rid).group(1)) not in ws.reviews:
+                 errors.append(f"{name}: row {rid} refers to a round missing from the review index")
++    ws_text = "\n".join(review_statements(ws) for ws in sets)
+     collab = repo / ".collab"
+     for f in sorted(collab.iterdir()) if collab.is_dir() else []:
+         if not f.is_file() or f.name.endswith((".sha256", ".diagnostic.json")) or f.name.startswith("."):
+@@ -482,6 +523,11 @@ def record(repo):
+         rel = str(f.relative_to(repo))
+         if rel in legacy:
+             continue
++        if f.name.endswith(".extracted.md"):
++            reason = extraction_error(f, rel, ws_text)
++            if reason:
++                errors.append(f".collab: {rel} is an extraction that does not qualify: {reason}")
++            continue
+         if not is_review_artifact(f):
+             errors.append(f".collab: {rel} is not a recognizable review artifact")
+         elif str(f.resolve()) not in indexed:
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index f22a272..21900cc 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -225,6 +225,85 @@ class DocsCheckTest(unittest.TestCase):
+         code, out = self.record()
+         self.assertEqual(code, 0, out)
+ 
++    def test_failed_invocation_extraction(self):
++        collab = self.f.repo / ".collab"
++        rel = ".collab/gemini-x-r09.extracted.md"
++        named = f"- Owner extraction of a failed invocation: `{rel}`\n"
++        text = "F1 [major]: extracted text\nVERDICT: REJECT\n"
++        ext = collab / "gemini-x-r09.extracted.md"
++        ext.write_text(text)
++        side = collab / "gemini-x-r09.extracted.md.sha256"
++        diag = collab / "gemini-x-r09.diagnostic.json"
++        good = hashlib.sha256(text.encode()).hexdigest() + "  " + rel + "\n"
++        side.write_text(good)
++        diag.write_text('{"exit_code": 70}\n')
++
++        def fails(reason):
++            code, out = self.record()
++            self.assertEqual(code, 1, out)
++            self.assertIn(f"{rel} is an extraction that does not qualify: {reason}", out)
++
++        # Qualifies only with the exact classification line; other mentions do not count.
++        missing = f"no workstream line 'Owner extraction of a failed invocation: `{rel}`'"
++        ws = self.f.repo / "workstreams" / "x.md"
++        self.f.workstream(GOOD_ROWS)
++        fails(missing)
++        for other in (f"`{rel}` is a review, not an extraction.\n",
++                      f"- Owner extraction of a failed invocation: `{rel}.backup`\n",
++                      f"- Owner extraction of a failed invocation: `{rel}` (draft)\n"):
++            self.f.workstream(GOOD_ROWS)
++            ws.write_text(ws.read_text().replace("## Findings and conditions", other + "\n## Findings and conditions"))
++            fails(missing)
++        # Only a line in a Reviews section free of code fences and HTML comment
++        # markers counts: not the Log, and nothing near a fence or comment.
++        self.f.workstream(GOOD_ROWS, log=named)
++        fails(missing)
++        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n",
++                     f"```\n~~~\n{named}```\n", f"````\n    ```\n{named}````\n",
++                     f"text `x <!-- comment ````\n{named}-->\n", f"<!-- ` --> `\n{named}",
++                     f"{named}```\nexample\n```\n", f"{named}Inline `<!--` example.\n"):
++            self.f.workstream(GOOD_ROWS)
++            ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
++            fails(missing)
++        for before in ("", "Text before the line.\n"):
++            self.f.workstream(GOOD_ROWS)
++            ws.write_text(ws.read_text().replace("## Findings and conditions", before + named + "\n## Findings and conditions"))
++            code, out = self.record()
++            self.assertEqual(code, 0, (before, out))
++        code, out = self.record()
++        self.assertEqual(code, 0, out)
++        # Diagnostic: missing, malformed, not a failure.
++        diag.unlink()
++        fails("no gemini-x-r09.diagnostic.json beside it")
++        diag.write_bytes(b"\xff\xfe not json")
++        fails("gemini-x-r09.diagnostic.json is unreadable or malformed")
++        for body in ('{"exit_code": 0}', '{"exit_code": true}', '{"exit_code": "70"}', '{}'):
++            diag.write_text(body)
++            fails("gemini-x-r09.diagnostic.json records no failed exit code")
++        for body in ("[70]", "[" * 100000 + "]" * 100000):
++            diag.write_text(body)
++            fails("gemini-x-r09.diagnostic.json is unreadable or malformed")
++        diag.write_text('{"exit_code": 70}\n')
++        # Sidecar: missing, undecodable, empty, wrong; stale after the extraction changes.
++        side.unlink()
++        fails("no checksum sidecar")
++        side.write_bytes(b"\xff\xfe\x00")
++        fails("checksum sidecar or extraction is unreadable")
++        side.write_text("")
++        fails("checksum sidecar is malformed or does not match")
++        side.write_text("0" * 64 + "\n")
++        fails("checksum sidecar is malformed or does not match")
++        side.write_text(good)
++        ext.write_text(text + "edited\n")
++        fails("checksum sidecar is malformed or does not match")
++        ext.write_text(text)
++        self.assertEqual(self.record()[0], 0)
++        # Any other unrecognized file is still flagged.
++        (collab / "gemini-x-r09.notes.md").write_text("# notes\n")
++        code, out = self.record()
++        self.assertEqual(code, 1)
++        self.assertIn("gemini-x-r09.notes.md is not a recognizable review artifact", out)
++
+     def test_newly_staged_artifact_passes_before_commit(self):
+         self.f.workstream(GOOD_ROWS)
+         self.f.adopt()
