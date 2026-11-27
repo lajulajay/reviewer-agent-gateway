@@ -342,30 +342,11 @@ def check_links(repo, errors):
 
 
 def review_statements(ws):
-    """A workstream's Reviews-section text outside fenced code blocks and HTML
-    comments: where an owner records active statements about review artifacts.
-    A fence closes only on the same character, at least as long, with nothing
-    after it; '<!--' inside an inline code span does not open a comment."""
-    out, fence, comment = [], None, False
-    for line in ws.sections.get("Reviews", []):
-        stripped = line.strip()
-        if comment:
-            comment = "-->" not in line
-            continue
-        m = re.match(r"^(`{3,}|~{3,})", stripped)
-        if fence:
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not stripped[len(m.group(1)):].strip():
-                fence = None
-            continue
-        if m:
-            fence = m.group(1)
-            continue
-        bare = re.sub(r"(`+)(?:(?!\1).)+?\1", "", line)
-        if "<!--" in bare:
-            comment = "-->" not in bare.split("<!--", 1)[1]
-            continue
-        out.append(line)
-    return "\n".join(out)
+    """A workstream's Reviews-section text, where an owner records statements about
+    review artifacts; empty if that section contains any code fence or HTML comment
+    marker, so no quoted or commented-out line can count as a statement."""
+    text = "\n".join(ws.sections.get("Reviews", []))
+    return "" if any(m in text for m in ("```", "~~~", "<!--", "-->")) else text
 
 
 def extraction_error(f, rel, ws_text):
@@ -373,7 +354,7 @@ def extraction_error(f, rel, ws_text):
     failed invocation's review text, or None. It qualifies only beside the wrapper's
     '<stem>.diagnostic.json' recording a non-zero exit, with a '.sha256' sidecar
     whose first field is its SHA-256, and when a line in a workstream's Reviews
-    section (outside code fences and HTML comments) reads exactly
+    section (one with no code fence or HTML comment marker) reads exactly
     "Owner extraction of a failed invocation: `<path>`" (the owner's classification)."""
     stem = f.name[: -len(".extracted.md")]
     diag = f.with_name(stem + ".diagnostic.json")

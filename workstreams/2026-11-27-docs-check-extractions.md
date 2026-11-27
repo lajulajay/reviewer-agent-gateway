@@ -34,20 +34,25 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 | r02 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r02.md` (+ .sha256) | REJECT |
 | r03 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r03.md` (+ .sha256) | REJECT |
 | r04 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r04.md` (+ .sha256) | REJECT |
+| r05 | Codex API (`gpt-6.1-terra`) | routine; follow-up; topic's fifth round | `.collab/codex-2026-11-27-docs-check-extractions-r05.md` (+ .sha256) | REJECT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | applied; open via R04-F1; to r05 | open |
+| R01-F1 | major | applied; open via R05; superseded by the marker rule (see R05-F1); to Gemini | open |
 | R01-F2 | major | verified r03 | closed |
 | R01-F3 | minor | verified r02 | closed |
 | R01-C1 | condition | verified r02 | closed |
-| R02-F1 | major | applied; open via R04-F1; to r05 | open |
+| R02-F1 | major | applied; open via R05; superseded by the marker rule (see R05-F1); to Gemini | open |
 | R02-F2 | minor | verified r03 | closed |
-| R03-F1 | major | applied; open via R04-F1; to r05 | open |
-| R04-F1 | major | applied: a fence closes only on the same character, at least as long, with nothing after; tests; mutation check; to r05 | open |
-| R04-F2 | minor | applied: inline code spans removed before looking for `<!--`; tests; mutation check; to r05 | open |
+| R03-F1 | major | applied; open via R05; superseded by the marker rule (see R05-F1); to Gemini | open |
+| R04-F1 | major | applied; open via R05; superseded by the marker rule (see R05-F1); to Gemini | open |
+| R04-F2 | minor | applied; open via R05; superseded by the marker rule (see R05-F1); to Gemini | open |
+| R05-F1 | major | applied: no Markdown parsing; a Reviews section containing ```, ~~~, <!-- or --> yields no classification; tests incl. the r05 cases; mutation check; to Gemini | open |
+| R05-F2 | major | applied: as R05-F1 (no inline-code parsing); to Gemini | open |
+| R05-F3 | minor | applied: as R05-F1; to Gemini | open |
+| R05-F4 | minor | applied: as R05-F1; to Gemini | open |
 
 ## Log
 
@@ -65,3 +70,6 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
   Reviews accepted); removing the filter fails the test. Next: Codex r04.
 - 2026-11-27: Codex r04 routine REJECT (F1 mismatched fences; F2 `<!--` in inline code). Repaired both with
   tests; each fix's removal fails the test. Next: Codex r05, the topic's last round.
+- 2026-11-27: Codex r05 routine REJECT (four Markdown-parsing edge cases). Replaced parsing with a refusal: if
+  the Reviews section has any fence or comment marker, no classification counts. Tests cover every r04/r05
+  case; reverting the refusal fails the test. Codex rounds on this topic are used up; next: Gemini.

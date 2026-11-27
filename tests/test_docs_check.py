@@ -245,25 +245,27 @@ class DocsCheckTest(unittest.TestCase):
 
         # Qualifies only with the exact classification line; other mentions do not count.
         missing = f"no workstream line 'Owner extraction of a failed invocation: `{rel}`'"
+        ws = self.f.repo / "workstreams" / "x.md"
         self.f.workstream(GOOD_ROWS)
         fails(missing)
         for other in (f"`{rel}` is a review, not an extraction.\n",
                       f"- Owner extraction of a failed invocation: `{rel}.backup`\n",
                       f"- Owner extraction of a failed invocation: `{rel}` (draft)\n"):
-            self.f.workstream(GOOD_ROWS, extra=other)
+            self.f.workstream(GOOD_ROWS)
+            ws.write_text(ws.read_text().replace("## Findings and conditions", other + "\n## Findings and conditions"))
             fails(missing)
-        # Only an active statement in the Reviews section counts: not the Log,
-        # a fenced example, or an HTML comment.
-        ws = self.f.repo / "workstreams" / "x.md"
+        # Only a line in a Reviews section free of code fences and HTML comment
+        # markers counts: not the Log, and nothing near a fence or comment.
         self.f.workstream(GOOD_ROWS, log=named)
         fails(missing)
         for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n",
-                     f"```\n~~~\n{named}```\n", f"````\n```\n{named}````\n", f"```\n``` text\n{named}```\n",
-                     f"text <!--\n{named}-->\n"):
+                     f"```\n~~~\n{named}```\n", f"````\n    ```\n{named}````\n",
+                     f"text `x <!-- comment ````\n{named}-->\n", f"<!-- ` --> `\n{named}",
+                     f"{named}```\nexample\n```\n", f"{named}Inline `<!--` example.\n"):
             self.f.workstream(GOOD_ROWS)
             ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
             fails(missing)
-        for before in ("", "Inline `<!--` is code, not a comment.\n", "```\nexample\n```\n"):
+        for before in ("", "Text before the line.\n"):
             self.f.workstream(GOOD_ROWS)
             ws.write_text(ws.read_text().replace("## Findings and conditions", before + named + "\n## Findings and conditions"))
             code, out = self.record()
