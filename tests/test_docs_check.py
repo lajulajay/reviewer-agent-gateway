@@ -226,27 +226,59 @@ class DocsCheckTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_failed_invocation_extraction(self):
-        self.f.workstream(GOOD_ROWS)
         collab = self.f.repo / ".collab"
+        rel = ".collab/gemini-x-r09.extracted.md"
+        named = f"Failed invocation r09; owner extraction `{rel}`.\n"
         text = "F1 [major]: extracted text\nVERDICT: REJECT\n"
         ext = collab / "gemini-x-r09.extracted.md"
         ext.write_text(text)
         side = collab / "gemini-x-r09.extracted.md.sha256"
-        # no diagnostic yet: flagged
-        side.write_text(hashlib.sha256(text.encode()).hexdigest() + "  .collab/gemini-x-r09.extracted.md\n")
-        self.assertIn("gemini-x-r09.extracted.md is an extraction without a matching", self.record()[1])
-        (collab / "gemini-x-r09.diagnostic.json").write_text('{"exit": 70}\n')
+        diag = collab / "gemini-x-r09.diagnostic.json"
+        good = hashlib.sha256(text.encode()).hexdigest() + "  " + rel + "\n"
+        side.write_text(good)
+        diag.write_text('{"exit_code": 70}\n')
+
+        def fails(reason):
+            code, out = self.record()
+            self.assertEqual(code, 1, out)
+            self.assertIn(f"{rel} is an extraction that does not qualify: {reason}", out)
+
+        # Qualifies only when a workstream names its exact path.
+        self.f.workstream(GOOD_ROWS)
+        fails("no workstream names its path")
+        self.f.workstream(GOOD_ROWS, extra=named)
         code, out = self.record()
         self.assertEqual(code, 0, out)
-        # wrong or missing checksum: flagged
-        side.write_text("0" * 64 + "\n")
-        self.assertIn("gemini-x-r09.extracted.md is an extraction without a matching", self.record()[1])
+        # Diagnostic: missing, malformed, not a failure.
+        diag.unlink()
+        fails("no gemini-x-r09.diagnostic.json beside it")
+        diag.write_bytes(b"\xff\xfe not json")
+        fails("gemini-x-r09.diagnostic.json is unreadable or malformed")
+        for body in ('{"exit_code": 0}', '{"exit_code": true}', '{"exit_code": "70"}', '{}'):
+            diag.write_text(body)
+            fails("gemini-x-r09.diagnostic.json records no failed exit code")
+        diag.write_text("[70]")
+        fails("gemini-x-r09.diagnostic.json is unreadable or malformed")
+        diag.write_text('{"exit_code": 70}\n')
+        # Sidecar: missing, undecodable, empty, wrong; stale after the extraction changes.
         side.unlink()
-        self.assertIn("gemini-x-r09.extracted.md is an extraction without a matching", self.record()[1])
-        # any other unrecognized file is still flagged
-        side.write_text(hashlib.sha256(text.encode()).hexdigest() + "\n")
+        fails("no checksum sidecar")
+        side.write_bytes(b"\xff\xfe\x00")
+        fails("checksum sidecar or extraction is unreadable")
+        side.write_text("")
+        fails("checksum sidecar is malformed or does not match")
+        side.write_text("0" * 64 + "\n")
+        fails("checksum sidecar is malformed or does not match")
+        side.write_text(good)
+        ext.write_text(text + "edited\n")
+        fails("checksum sidecar is malformed or does not match")
+        ext.write_text(text)
+        self.assertEqual(self.record()[0], 0)
+        # Any other unrecognized file is still flagged.
         (collab / "gemini-x-r09.notes.md").write_text("# notes\n")
-        self.assertIn("gemini-x-r09.notes.md is not a recognizable review artifact", self.record()[1])
+        code, out = self.record()
+        self.assertEqual(code, 1)
+        self.assertIn("gemini-x-r09.notes.md is not a recognizable review artifact", out)
 
     def test_newly_staged_artifact_passes_before_commit(self):
         self.f.workstream(GOOD_ROWS)

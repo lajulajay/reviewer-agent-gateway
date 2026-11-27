@@ -30,14 +30,23 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
+| r01 | Codex API (`gpt-6.1-terra`) | routine; small checker exception with tests | `.collab/codex-2026-11-27-docs-check-extractions.md` (+ .sha256) | REJECT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
+| R01-F1 | major | applied: also requires a failed exit code in the diagnostic and a workstream naming the exact path; to r02 | open |
+| R01-F2 | major | applied: unreadable or malformed diagnostic or sidecar is a reported failure; tests; to r02 | open |
+| R01-F3 | minor | applied: exit status asserted; stale checksum and scope tests; to r02 | open |
+| R01-C1 | condition | applied: one message per failed check; to r02 | open |
 
 ## Log
 
 - 2026-11-27: change and test written on branch `docs-check-extractions`;
   unit suite passes (34); the new test fails on main's checker;
   kalshi-temperature-bot passes record with the change.
+- 2026-11-27: Codex r01 routine REJECT (F1, F2 major; F3 minor; C1). Repaired: the exception also needs a
+  non-zero `exit_code` in the diagnostic and a workstream naming the exact path; read failures reported;
+  one message per check; tests extended (exit status, stale checksum, malformed inputs). Suite passes;
+  the new test fails on main. Next: Codex r02 on the delta.

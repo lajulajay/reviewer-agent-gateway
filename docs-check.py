@@ -341,6 +341,37 @@ def check_links(repo, errors):
                 errors.append(f"link: {f.relative_to(repo)} -> {link} does not resolve")
 
 
+def extraction_error(f, rel, ws_text):
+    """Why a .collab '<stem>.extracted.md' is not an accepted owner extraction of a
+    failed invocation's review text, or None. It qualifies only beside the wrapper's
+    '<stem>.diagnostic.json' recording a non-zero exit, with a '.sha256' sidecar
+    whose first field is its SHA-256, and when a workstream names its exact path
+    (the owner's classification on the record)."""
+    stem = f.name[: -len(".extracted.md")]
+    diag = f.with_name(stem + ".diagnostic.json")
+    side = f.with_name(f.name + ".sha256")
+    if not diag.is_file():
+        return f"no {stem}.diagnostic.json beside it"
+    try:
+        code = json.loads(diag.read_text()).get("exit_code")
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
+        return f"{stem}.diagnostic.json is unreadable or malformed"
+    if not isinstance(code, int) or isinstance(code, bool) or code == 0:
+        return f"{stem}.diagnostic.json records no failed exit code"
+    if not side.is_file():
+        return "no checksum sidecar"
+    try:
+        digest = side.read_text().split()
+        actual = hashlib.sha256(f.read_bytes()).hexdigest()
+    except (OSError, UnicodeDecodeError):
+        return "checksum sidecar or extraction is unreadable"
+    if not digest or digest[0] != actual:
+        return "checksum sidecar is malformed or does not match"
+    if rel not in ws_text:
+        return "no workstream names its path"
+    return None
+
+
 def standards_pin(repo):
     agents = repo / "AGENTS.md"
     m = re.search(r"(?m)^Standards: reviewer-agent-gateway@([0-9a-f]{7,40})\s*$", agents.read_text()) if agents.is_file() else None
@@ -475,6 +506,7 @@ def record(repo):
         for rid in ws.rows:
             if int(ROW_ID.match(rid).group(1)) not in ws.reviews:
                 errors.append(f"{name}: row {rid} refers to a round missing from the review index")
+    ws_text = "\n".join(ws.text for ws in sets)
     collab = repo / ".collab"
     for f in sorted(collab.iterdir()) if collab.is_dir() else []:
         if not f.is_file() or f.name.endswith((".sha256", ".diagnostic.json")) or f.name.startswith("."):
@@ -483,16 +515,9 @@ def record(repo):
         if rel in legacy:
             continue
         if f.name.endswith(".extracted.md"):
-            # An owner's extraction of a failed invocation's review text (not a
-            # review): kept only beside that invocation's diagnostic, with a
-            # sidecar whose first field is the extraction's SHA-256.
-            stem = f.name[: -len(".extracted.md")]
-            side = f.with_name(f.name + ".sha256")
-            digest = side.read_text().split() if side.is_file() else []
-            if not (f.with_name(stem + ".diagnostic.json").is_file() and digest
-                    and digest[0] == hashlib.sha256(f.read_bytes()).hexdigest()):
-                errors.append(f".collab: {rel} is an extraction without a matching "
-                              f"{stem}.diagnostic.json and checksum sidecar")
+            reason = extraction_error(f, rel, ws_text)
+            if reason:
+                errors.append(f".collab: {rel} is an extraction that does not qualify: {reason}")
             continue
         if not is_review_artifact(f):
             errors.append(f".collab: {rel} is not a recognizable review artifact")
