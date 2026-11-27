@@ -225,6 +225,29 @@ class DocsCheckTest(unittest.TestCase):
         code, out = self.record()
         self.assertEqual(code, 0, out)
 
+    def test_failed_invocation_extraction(self):
+        self.f.workstream(GOOD_ROWS)
+        collab = self.f.repo / ".collab"
+        text = "F1 [major]: extracted text\nVERDICT: REJECT\n"
+        ext = collab / "gemini-x-r09.extracted.md"
+        ext.write_text(text)
+        side = collab / "gemini-x-r09.extracted.md.sha256"
+        # no diagnostic yet: flagged
+        side.write_text(hashlib.sha256(text.encode()).hexdigest() + "  .collab/gemini-x-r09.extracted.md\n")
+        self.assertIn("gemini-x-r09.extracted.md is an extraction without a matching", self.record()[1])
+        (collab / "gemini-x-r09.diagnostic.json").write_text('{"exit": 70}\n')
+        code, out = self.record()
+        self.assertEqual(code, 0, out)
+        # wrong or missing checksum: flagged
+        side.write_text("0" * 64 + "\n")
+        self.assertIn("gemini-x-r09.extracted.md is an extraction without a matching", self.record()[1])
+        side.unlink()
+        self.assertIn("gemini-x-r09.extracted.md is an extraction without a matching", self.record()[1])
+        # any other unrecognized file is still flagged
+        side.write_text(hashlib.sha256(text.encode()).hexdigest() + "\n")
+        (collab / "gemini-x-r09.notes.md").write_text("# notes\n")
+        self.assertIn("gemini-x-r09.notes.md is not a recognizable review artifact", self.record()[1])
+
     def test_newly_staged_artifact_passes_before_commit(self):
         self.f.workstream(GOOD_ROWS)
         self.f.adopt()

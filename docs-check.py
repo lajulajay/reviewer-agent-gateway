@@ -482,6 +482,18 @@ def record(repo):
         rel = str(f.relative_to(repo))
         if rel in legacy:
             continue
+        if f.name.endswith(".extracted.md"):
+            # An owner's extraction of a failed invocation's review text (not a
+            # review): kept only beside that invocation's diagnostic, with a
+            # sidecar whose first field is the extraction's SHA-256.
+            stem = f.name[: -len(".extracted.md")]
+            side = f.with_name(f.name + ".sha256")
+            digest = side.read_text().split() if side.is_file() else []
+            if not (f.with_name(stem + ".diagnostic.json").is_file() and digest
+                    and digest[0] == hashlib.sha256(f.read_bytes()).hexdigest()):
+                errors.append(f".collab: {rel} is an extraction without a matching "
+                              f"{stem}.diagnostic.json and checksum sidecar")
+            continue
         if not is_review_artifact(f):
             errors.append(f".collab: {rel} is not a recognizable review artifact")
         elif str(f.resolve()) not in indexed:
