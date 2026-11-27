@@ -32,17 +32,19 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Codex API (`gpt-6.1-terra`) | routine; small checker exception with tests | `.collab/codex-2026-11-27-docs-check-extractions.md` (+ .sha256) | REJECT |
 | r02 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r02.md` (+ .sha256) | REJECT |
+| r03 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r03.md` (+ .sha256) | REJECT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | applied; r02 open via R02-F1: exact classification line now required; to r03 | open |
-| R01-F2 | major | applied; r02 open via R02-F2: RecursionError caught; to r03 | open |
+| R01-F1 | major | applied; open via R02-F1 then R03-F1; to r04 | open |
+| R01-F2 | major | verified r03 | closed |
 | R01-F3 | minor | verified r02 | closed |
 | R01-C1 | condition | verified r02 | closed |
-| R02-F1 | major | applied: a workstream line must read exactly "Owner extraction of a failed invocation: `<path>`"; other mentions, a longer path or trailing text fail; tests; to r03 | open |
-| R02-F2 | minor | applied: RecursionError caught; deep-nesting test fails without it; to r03 | open |
+| R02-F1 | major | applied (exact line); open via R03-F1; to r04 | open |
+| R02-F2 | minor | verified r03 | closed |
+| R03-F1 | major | applied: the line counts only in a workstream's Reviews section, outside fenced code and HTML comments; tests; mutation check; to r04 | open |
 
 ## Log
 
@@ -55,3 +57,6 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
   the new test fails on main. Next: Codex r02 on the delta.
 - 2026-11-27: Codex r02 routine REJECT; R01-F3 and R01-C1 resolved. Repaired R02-F1 (exact classification
   line) and R02-F2 (RecursionError); tests extended; suite passes. Next: Codex r03 on the delta.
+- 2026-11-27: Codex r03 routine REJECT; R01-F2 and R02-F2 resolved. Repaired R03-F1: classification read
+  only from Reviews-section text outside fences and comments; tests (Log, fenced, comment rejected;
+  Reviews accepted); removing the filter fails the test. Next: Codex r04.

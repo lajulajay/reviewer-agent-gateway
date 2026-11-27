@@ -252,7 +252,18 @@ class DocsCheckTest(unittest.TestCase):
                       f"- Owner extraction of a failed invocation: `{rel}` (draft)\n"):
             self.f.workstream(GOOD_ROWS, extra=other)
             fails(missing)
-        self.f.workstream(GOOD_ROWS, extra=named)
+        # Only an active statement in the Reviews section counts: not the Log,
+        # a fenced example, or an HTML comment.
+        ws = self.f.repo / "workstreams" / "x.md"
+        self.f.workstream(GOOD_ROWS, log=named)
+        fails(missing)
+        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n"):
+            self.f.workstream(GOOD_ROWS)
+            ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
+            fails(missing)
+        self.f.workstream(GOOD_ROWS)
+        ws.write_text(ws.read_text().replace("## Findings and conditions", named + "\n## Findings and conditions"))
+        self.assertEqual(self.record()[0], 0, self.record()[1])
         code, out = self.record()
         self.assertEqual(code, 0, out)
         # Diagnostic: missing, malformed, not a failure.
