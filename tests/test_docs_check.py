@@ -261,7 +261,8 @@ class DocsCheckTest(unittest.TestCase):
         for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n",
                      f"```\n~~~\n{named}```\n", f"````\n    ```\n{named}````\n",
                      f"text `x <!-- comment ````\n{named}-->\n", f"<!-- ` --> `\n{named}",
-                     f"{named}```\nexample\n```\n", f"{named}Inline `<!--` example.\n"):
+                     f"{named}```\nexample\n```\n", f"{named}Inline `<!--` example.\n",
+                     f"    {named}", f"\t{named}", f" {named}", f"<pre>\n{named}</pre>\n", f"<CODE>{named.strip()}</CODE>\n"):
             self.f.workstream(GOOD_ROWS)
             ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
             fails(missing)

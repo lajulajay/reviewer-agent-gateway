@@ -343,10 +343,10 @@ def check_links(repo, errors):
 
 def review_statements(ws):
     """A workstream's Reviews-section text, where an owner records statements about
-    review artifacts; empty if that section contains any code fence or HTML comment
-    marker, so no quoted or commented-out line can count as a statement."""
+    review artifacts; empty if that section contains any code fence, HTML comment,
+    <pre> or <code> marker, so no quoted or commented-out line can count as a statement."""
     text = "\n".join(ws.sections.get("Reviews", []))
-    return "" if any(m in text for m in ("```", "~~~", "<!--", "-->")) else text
+    return "" if any(m in text.lower() for m in ("```", "~~~", "<!--", "-->", "<pre", "<code")) else text
 
 
 def extraction_error(f, rel, ws_text):
@@ -354,7 +354,8 @@ def extraction_error(f, rel, ws_text):
     failed invocation's review text, or None. It qualifies only beside the wrapper's
     '<stem>.diagnostic.json' recording a non-zero exit, with a '.sha256' sidecar
     whose first field is its SHA-256, and when a line in a workstream's Reviews
-    section (one with no code fence or HTML comment marker) reads exactly
+    section (one with no fence, comment, <pre> or <code> marker) reads exactly, from
+    the start of the line (no indentation),
     "Owner extraction of a failed invocation: `<path>`" (the owner's classification)."""
     stem = f.name[: -len(".extracted.md")]
     diag = f.with_name(stem + ".diagnostic.json")
@@ -376,7 +377,7 @@ def extraction_error(f, rel, ws_text):
         return "checksum sidecar or extraction is unreadable"
     if not digest or digest[0] != actual:
         return "checksum sidecar is malformed or does not match"
-    if not re.search(rf"(?m)^\s*(?:- )?Owner extraction of a failed invocation: `{re.escape(rel)}`\.?[ \t]*$", ws_text):
+    if not re.search(rf"(?m)^(?:- )?Owner extraction of a failed invocation: `{re.escape(rel)}`\.?[ \t]*$", ws_text):
         return f"no workstream line 'Owner extraction of a failed invocation: `{rel}`'"
     return None
 
