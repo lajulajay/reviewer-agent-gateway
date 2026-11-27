@@ -2,10 +2,10 @@
 
 Workstream: 2026-11-27-docs-check-extractions
 Owner: Claude (2026-11-27, assigned by the user in this session)
-Status: active
-Branch: docs-check-extractions
+Status: done (2026-11-27)
+Branch: docs-check-extractions (merged to main)
 Operational: no
-Links: [protocol](../PROTOCOL.md)
+Links: [protocol](../../PROTOCOL.md)
 
 ## Brief
 
@@ -36,6 +36,7 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 | r04 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r04.md` (+ .sha256) | REJECT |
 | r05 | Codex API (`gpt-6.1-terra`) | routine; follow-up; topic's fifth round | `.collab/codex-2026-11-27-docs-check-extractions-r05.md` (+ .sha256) | REJECT |
 | r06 | Gemini (backup; Codex topic budget used) | routine; full change and r05 | `.collab/gemini-2026-11-27-docs-check-extractions-r06.json` (+ .sha256) | ACCEPT WITH CONDITIONS |
+| r07 | Gemini (backup) | routine; check of the r06 fixes | `.collab/gemini-2026-11-27-docs-check-extractions-r07.json` (+ .sha256) | ACCEPT |
 
 ## Findings and conditions
 
@@ -54,8 +55,8 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 | R05-F2 | major | verified r06 | closed |
 | R05-F3 | minor | verified r06 | closed |
 | R05-F4 | minor | verified r06 | closed |
-| R06-F1 | minor | applied: the line must start at column 0 (optional "- "); `<pre`/`<code` (any case) join the refused markers; tests; to r07 | open |
-| R06-C1 | condition | applied: as R06-F1; to r07 | open |
+| R06-F1 | minor | verified r07 | closed |
+| R06-C1 | condition | verified r07 | closed |
 
 ## Log
 
@@ -78,3 +79,11 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
   case; reverting the refusal fails the test. Codex rounds on this topic are used up; next: Gemini.
 - 2026-11-27: Gemini r06 routine ACCEPT WITH CONDITIONS; all nine open items resolved. Applied F1/C1 (no
   indentation; `<pre`/`<code` refused) with tests. Next: Gemini r07, its one check of the fixes.
+- 2026-11-27: Gemini r07 ACCEPT; R06-F1 and R06-C1 resolved. Merged to main under the user's 2026-11-27 choice. Closed.
+- r01: raw review compared with its rows; no unlabeled actionable item
+- r02: raw review compared with its rows; no unlabeled actionable item
+- r03: raw review compared with its rows; no unlabeled actionable item
+- r04: raw review compared with its rows; no unlabeled actionable item
+- r05: raw review compared with its rows; no unlabeled actionable item
+- r06: raw review compared with its rows; no unlabeled actionable item
+- r07: raw review compared with its rows; no unlabeled actionable item
