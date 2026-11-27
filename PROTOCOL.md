@@ -62,6 +62,14 @@ registry of agents and the model vendors each one runs.
   view is advisory; it never decides by vote, and the decision stays with the
   user. A question that is the user's to decide but on which the agents
   agree goes to the user directly.
+- **Presenting decisions to the user (user decision 2026-11-27).** Every
+  decision brought to the user, in any repository, gives in writing: a
+  recommendation, succinct context (what is at stake, in plain terms), and
+  the pros and cons of each option. After that written block, put the same
+  decisions to the user as clickable questions where the agent's interface
+  supports them (for example Claude's AskUserQuestion), with the recommended
+  option first and labelled as recommended; each question must stand on its
+  own.
 
 ## Invocation
 
