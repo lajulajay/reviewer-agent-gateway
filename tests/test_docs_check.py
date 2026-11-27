@@ -228,7 +228,7 @@ class DocsCheckTest(unittest.TestCase):
     def test_failed_invocation_extraction(self):
         collab = self.f.repo / ".collab"
         rel = ".collab/gemini-x-r09.extracted.md"
-        named = f"Failed invocation r09; owner extraction `{rel}`.\n"
+        named = f"- Owner extraction of a failed invocation: `{rel}`\n"
         text = "F1 [major]: extracted text\nVERDICT: REJECT\n"
         ext = collab / "gemini-x-r09.extracted.md"
         ext.write_text(text)
@@ -243,9 +243,15 @@ class DocsCheckTest(unittest.TestCase):
             self.assertEqual(code, 1, out)
             self.assertIn(f"{rel} is an extraction that does not qualify: {reason}", out)
 
-        # Qualifies only when a workstream names its exact path.
+        # Qualifies only with the exact classification line; other mentions do not count.
+        missing = f"no workstream line 'Owner extraction of a failed invocation: `{rel}`'"
         self.f.workstream(GOOD_ROWS)
-        fails("no workstream names its path")
+        fails(missing)
+        for other in (f"`{rel}` is a review, not an extraction.\n",
+                      f"- Owner extraction of a failed invocation: `{rel}.backup`\n",
+                      f"- Owner extraction of a failed invocation: `{rel}` (draft)\n"):
+            self.f.workstream(GOOD_ROWS, extra=other)
+            fails(missing)
         self.f.workstream(GOOD_ROWS, extra=named)
         code, out = self.record()
         self.assertEqual(code, 0, out)
@@ -257,8 +263,9 @@ class DocsCheckTest(unittest.TestCase):
         for body in ('{"exit_code": 0}', '{"exit_code": true}', '{"exit_code": "70"}', '{}'):
             diag.write_text(body)
             fails("gemini-x-r09.diagnostic.json records no failed exit code")
-        diag.write_text("[70]")
-        fails("gemini-x-r09.diagnostic.json is unreadable or malformed")
+        for body in ("[70]", "[" * 100000 + "]" * 100000):
+            diag.write_text(body)
+            fails("gemini-x-r09.diagnostic.json is unreadable or malformed")
         diag.write_text('{"exit_code": 70}\n')
         # Sidecar: missing, undecodable, empty, wrong; stale after the extraction changes.
         side.unlink()

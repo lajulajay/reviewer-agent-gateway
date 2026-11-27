@@ -345,8 +345,8 @@ def extraction_error(f, rel, ws_text):
     """Why a .collab '<stem>.extracted.md' is not an accepted owner extraction of a
     failed invocation's review text, or None. It qualifies only beside the wrapper's
     '<stem>.diagnostic.json' recording a non-zero exit, with a '.sha256' sidecar
-    whose first field is its SHA-256, and when a workstream names its exact path
-    (the owner's classification on the record)."""
+    whose first field is its SHA-256, and when a workstream line reads exactly
+    "Owner extraction of a failed invocation: `<path>`" (the owner's classification)."""
     stem = f.name[: -len(".extracted.md")]
     diag = f.with_name(stem + ".diagnostic.json")
     side = f.with_name(f.name + ".sha256")
@@ -354,7 +354,7 @@ def extraction_error(f, rel, ws_text):
         return f"no {stem}.diagnostic.json beside it"
     try:
         code = json.loads(diag.read_text()).get("exit_code")
-    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError, RecursionError):
         return f"{stem}.diagnostic.json is unreadable or malformed"
     if not isinstance(code, int) or isinstance(code, bool) or code == 0:
         return f"{stem}.diagnostic.json records no failed exit code"
@@ -367,8 +367,8 @@ def extraction_error(f, rel, ws_text):
         return "checksum sidecar or extraction is unreadable"
     if not digest or digest[0] != actual:
         return "checksum sidecar is malformed or does not match"
-    if rel not in ws_text:
-        return "no workstream names its path"
+    if not re.search(rf"(?m)^\s*(?:- )?Owner extraction of a failed invocation: `{re.escape(rel)}`\.?[ \t]*$", ws_text):
+        return f"no workstream line 'Owner extraction of a failed invocation: `{rel}`'"
     return None
 
 

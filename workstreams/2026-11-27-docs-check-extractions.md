@@ -31,15 +31,18 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 | Round | Reviewer | Tier | Artifact | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | r01 | Codex API (`gpt-6.1-terra`) | routine; small checker exception with tests | `.collab/codex-2026-11-27-docs-check-extractions.md` (+ .sha256) | REJECT |
+| r02 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r02.md` (+ .sha256) | REJECT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | applied: also requires a failed exit code in the diagnostic and a workstream naming the exact path; to r02 | open |
-| R01-F2 | major | applied: unreadable or malformed diagnostic or sidecar is a reported failure; tests; to r02 | open |
-| R01-F3 | minor | applied: exit status asserted; stale checksum and scope tests; to r02 | open |
-| R01-C1 | condition | applied: one message per failed check; to r02 | open |
+| R01-F1 | major | applied; r02 open via R02-F1: exact classification line now required; to r03 | open |
+| R01-F2 | major | applied; r02 open via R02-F2: RecursionError caught; to r03 | open |
+| R01-F3 | minor | verified r02 | closed |
+| R01-C1 | condition | verified r02 | closed |
+| R02-F1 | major | applied: a workstream line must read exactly "Owner extraction of a failed invocation: `<path>`"; other mentions, a longer path or trailing text fail; tests; to r03 | open |
+| R02-F2 | minor | applied: RecursionError caught; deep-nesting test fails without it; to r03 | open |
 
 ## Log
 
@@ -50,3 +53,5 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
   non-zero `exit_code` in the diagnostic and a workstream naming the exact path; read failures reported;
   one message per check; tests extended (exit status, stale checksum, malformed inputs). Suite passes;
   the new test fails on main. Next: Codex r02 on the delta.
+- 2026-11-27: Codex r02 routine REJECT; R01-F3 and R01-C1 resolved. Repaired R02-F1 (exact classification
+  line) and R02-F2 (RecursionError); tests extended; suite passes. Next: Codex r03 on the delta.
