@@ -1,0 +1,64 @@
+diff --git a/docs-check.py b/docs-check.py
+index 22ff808..8f94b29 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -343,20 +343,26 @@ def check_links(repo, errors):
+ 
+ def review_statements(ws):
+     """A workstream's Reviews-section text outside fenced code blocks and HTML
+-    comments: where an owner records active statements about review artifacts."""
+-    out, fence, comment = [], False, False
++    comments: where an owner records active statements about review artifacts.
++    A fence closes only on the same character, at least as long, with nothing
++    after it; '<!--' inside an inline code span does not open a comment."""
++    out, fence, comment = [], None, False
+     for line in ws.sections.get("Reviews", []):
+         stripped = line.strip()
+         if comment:
+             comment = "-->" not in line
+             continue
+-        if stripped.startswith(("```", "~~~")):
+-            fence = not fence
+-            continue
++        m = re.match(r"^(`{3,}|~{3,})", stripped)
+         if fence:
++            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not stripped[len(m.group(1)):].strip():
++                fence = None
++            continue
++        if m:
++            fence = m.group(1)
+             continue
+-        if "<!--" in line:
+-            comment = "-->" not in line.split("<!--", 1)[1]
++        bare = re.sub(r"(`+)(?:(?!\1).)+?\1", "", line)
++        if "<!--" in bare:
++            comment = "-->" not in bare.split("<!--", 1)[1]
+             continue
+         out.append(line)
+     return "\n".join(out)
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index 4266dd3..ee2a736 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -257,13 +257,17 @@ class DocsCheckTest(unittest.TestCase):
+         ws = self.f.repo / "workstreams" / "x.md"
+         self.f.workstream(GOOD_ROWS, log=named)
+         fails(missing)
+-        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n"):
++        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n",
++                     f"```\n~~~\n{named}```\n", f"````\n```\n{named}````\n", f"```\n``` text\n{named}```\n",
++                     f"text <!--\n{named}-->\n"):
+             self.f.workstream(GOOD_ROWS)
+             ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
+             fails(missing)
+-        self.f.workstream(GOOD_ROWS)
+-        ws.write_text(ws.read_text().replace("## Findings and conditions", named + "\n## Findings and conditions"))
+-        self.assertEqual(self.record()[0], 0, self.record()[1])
++        for before in ("", "Inline `<!--` is code, not a comment.\n", "```\nexample\n```\n"):
++            self.f.workstream(GOOD_ROWS)
++            ws.write_text(ws.read_text().replace("## Findings and conditions", before + named + "\n## Findings and conditions"))
++            code, out = self.record()
++            self.assertEqual(code, 0, (before, out))
+         code, out = self.record()
+         self.assertEqual(code, 0, out)
+         # Diagnostic: missing, malformed, not a failure.
