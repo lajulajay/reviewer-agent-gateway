@@ -57,19 +57,13 @@ registry of agents and the model vendors each one runs.
   first go to evidence or a frozen test; Gemini reviews what that leaves
   open. The user then receives one packet: the competing claims, the
   evidence, Gemini's assessment, and the exact decision needed. Skip Gemini
-  only when it is unavailable (quota below the wrapper floor, outage, or
-  failed invocation after diagnosis), and say so in that packet. Gemini's
+  only when it is unavailable (as above, or quota below the wrapper floor),
+  and say so in that packet. Gemini's
   view is advisory; it never decides by vote, and the decision stays with the
   user. A question that is the user's to decide but on which the agents
-  agree goes to the user directly.
-- **Presenting decisions to the user (user decision 2026-11-27).** Every
-  decision brought to the user, in any repository, gives in writing: a
-  recommendation, succinct context (what is at stake, in plain terms), and
-  the pros and cons of each option. After that written block, put the same
-  decisions to the user as clickable questions where the agent's interface
-  supports them (for example Claude's AskUserQuestion), with the recommended
-  option first and labelled as recommended; each question must stand on its
-  own.
+  agree goes to the user directly. Decisions for the user give a
+  recommendation, context and pros/cons, then clickable questions
+  (user decision 2026-11-27).
 
 ## Invocation
 
@@ -133,9 +127,7 @@ Every review call spends the user's plan usage, so the wrappers enforce
   records the reason in the artifact, and `docs-check.py record` fails until
   a user Decisions entry approves a "budget override" for that round (`rNN`).
 - **Output names** must be `<provider>-YYYY-MM-DD-<topic>[-rNN].md|json`;
-  the daily cap reads the date from the name. Automatic selection also accepts
-  an `auto-` template but writes the actual artifact with the provider prefix.
-  A refused attempt reserves its name, including budget refusals. If the user
+  the daily cap reads the date from the name (`auto-`: see above). A refused attempt reserves its name, including budget refusals. If the user
   approves a budget override, use a new `rNN` name and cite that round in the
   Decisions entry.
 
