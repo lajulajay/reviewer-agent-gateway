@@ -1,0 +1,72 @@
+diff --git a/docs-check.py b/docs-check.py
+index 3f12281..22ff808 100755
+--- a/docs-check.py
++++ b/docs-check.py
+@@ -341,11 +341,33 @@ def check_links(repo, errors):
+                 errors.append(f"link: {f.relative_to(repo)} -> {link} does not resolve")
+ 
+ 
++def review_statements(ws):
++    """A workstream's Reviews-section text outside fenced code blocks and HTML
++    comments: where an owner records active statements about review artifacts."""
++    out, fence, comment = [], False, False
++    for line in ws.sections.get("Reviews", []):
++        stripped = line.strip()
++        if comment:
++            comment = "-->" not in line
++            continue
++        if stripped.startswith(("```", "~~~")):
++            fence = not fence
++            continue
++        if fence:
++            continue
++        if "<!--" in line:
++            comment = "-->" not in line.split("<!--", 1)[1]
++            continue
++        out.append(line)
++    return "\n".join(out)
++
++
+ def extraction_error(f, rel, ws_text):
+     """Why a .collab '<stem>.extracted.md' is not an accepted owner extraction of a
+     failed invocation's review text, or None. It qualifies only beside the wrapper's
+     '<stem>.diagnostic.json' recording a non-zero exit, with a '.sha256' sidecar
+-    whose first field is its SHA-256, and when a workstream line reads exactly
++    whose first field is its SHA-256, and when a line in a workstream's Reviews
++    section (outside code fences and HTML comments) reads exactly
+     "Owner extraction of a failed invocation: `<path>`" (the owner's classification)."""
+     stem = f.name[: -len(".extracted.md")]
+     diag = f.with_name(stem + ".diagnostic.json")
+@@ -506,7 +528,7 @@ def record(repo):
+         for rid in ws.rows:
+             if int(ROW_ID.match(rid).group(1)) not in ws.reviews:
+                 errors.append(f"{name}: row {rid} refers to a round missing from the review index")
+-    ws_text = "\n".join(ws.text for ws in sets)
++    ws_text = "\n".join(review_statements(ws) for ws in sets)
+     collab = repo / ".collab"
+     for f in sorted(collab.iterdir()) if collab.is_dir() else []:
+         if not f.is_file() or f.name.endswith((".sha256", ".diagnostic.json")) or f.name.startswith("."):
+diff --git a/tests/test_docs_check.py b/tests/test_docs_check.py
+index d77d2fc..4266dd3 100644
+--- a/tests/test_docs_check.py
++++ b/tests/test_docs_check.py
+@@ -252,7 +252,18 @@ class DocsCheckTest(unittest.TestCase):
+                       f"- Owner extraction of a failed invocation: `{rel}` (draft)\n"):
+             self.f.workstream(GOOD_ROWS, extra=other)
+             fails(missing)
+-        self.f.workstream(GOOD_ROWS, extra=named)
++        # Only an active statement in the Reviews section counts: not the Log,
++        # a fenced example, or an HTML comment.
++        ws = self.f.repo / "workstreams" / "x.md"
++        self.f.workstream(GOOD_ROWS, log=named)
++        fails(missing)
++        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n"):
++            self.f.workstream(GOOD_ROWS)
++            ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
++            fails(missing)
++        self.f.workstream(GOOD_ROWS)
++        ws.write_text(ws.read_text().replace("## Findings and conditions", named + "\n## Findings and conditions"))
++        self.assertEqual(self.record()[0], 0, self.record()[1])
+         code, out = self.record()
+         self.assertEqual(code, 0, out)
+         # Diagnostic: missing, malformed, not a failure.
