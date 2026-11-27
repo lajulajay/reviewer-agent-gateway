@@ -257,13 +257,17 @@ class DocsCheckTest(unittest.TestCase):
         ws = self.f.repo / "workstreams" / "x.md"
         self.f.workstream(GOOD_ROWS, log=named)
         fails(missing)
-        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n"):
+        for wrap in (f"```\n{named}```\n", f"<!--\n{named}-->\n", f"<!-- {named.strip()} -->\n",
+                     f"```\n~~~\n{named}```\n", f"````\n```\n{named}````\n", f"```\n``` text\n{named}```\n",
+                     f"text <!--\n{named}-->\n"):
             self.f.workstream(GOOD_ROWS)
             ws.write_text(ws.read_text().replace("## Findings and conditions", wrap + "\n## Findings and conditions"))
             fails(missing)
-        self.f.workstream(GOOD_ROWS)
-        ws.write_text(ws.read_text().replace("## Findings and conditions", named + "\n## Findings and conditions"))
-        self.assertEqual(self.record()[0], 0, self.record()[1])
+        for before in ("", "Inline `<!--` is code, not a comment.\n", "```\nexample\n```\n"):
+            self.f.workstream(GOOD_ROWS)
+            ws.write_text(ws.read_text().replace("## Findings and conditions", before + named + "\n## Findings and conditions"))
+            code, out = self.record()
+            self.assertEqual(code, 0, (before, out))
         code, out = self.record()
         self.assertEqual(code, 0, out)
         # Diagnostic: missing, malformed, not a failure.

@@ -33,18 +33,21 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 | r01 | Codex API (`gpt-6.1-terra`) | routine; small checker exception with tests | `.collab/codex-2026-11-27-docs-check-extractions.md` (+ .sha256) | REJECT |
 | r02 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r02.md` (+ .sha256) | REJECT |
 | r03 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r03.md` (+ .sha256) | REJECT |
+| r04 | Codex API (`gpt-6.1-terra`) | routine; follow-up | `.collab/codex-2026-11-27-docs-check-extractions-r04.md` (+ .sha256) | REJECT |
 
 ## Findings and conditions
 
 | ID | Severity | Disposition | Status |
 | :--- | :--- | :--- | :--- |
-| R01-F1 | major | applied; open via R02-F1 then R03-F1; to r04 | open |
+| R01-F1 | major | applied; open via R04-F1; to r05 | open |
 | R01-F2 | major | verified r03 | closed |
 | R01-F3 | minor | verified r02 | closed |
 | R01-C1 | condition | verified r02 | closed |
-| R02-F1 | major | applied (exact line); open via R03-F1; to r04 | open |
+| R02-F1 | major | applied; open via R04-F1; to r05 | open |
 | R02-F2 | minor | verified r03 | closed |
-| R03-F1 | major | applied: the line counts only in a workstream's Reviews section, outside fenced code and HTML comments; tests; mutation check; to r04 | open |
+| R03-F1 | major | applied; open via R04-F1; to r05 | open |
+| R04-F1 | major | applied: a fence closes only on the same character, at least as long, with nothing after; tests; mutation check; to r05 | open |
+| R04-F2 | minor | applied: inline code spans removed before looking for `<!--`; tests; mutation check; to r05 | open |
 
 ## Log
 
@@ -60,3 +63,5 @@ SHA-256; otherwise it is reported. Test added in `tests/test_docs_check.py`.
 - 2026-11-27: Codex r03 routine REJECT; R01-F2 and R02-F2 resolved. Repaired R03-F1: classification read
   only from Reviews-section text outside fences and comments; tests (Log, fenced, comment rejected;
   Reviews accepted); removing the filter fails the test. Next: Codex r04.
+- 2026-11-27: Codex r04 routine REJECT (F1 mismatched fences; F2 `<!--` in inline code). Repaired both with
+  tests; each fix's removal fails the test. Next: Codex r05, the topic's last round.
